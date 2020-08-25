@@ -90,7 +90,6 @@ class Generator {
     let moduleNames = [
       self.options.gRPCModuleName,
       "NIO",
-      "SwiftProtobuf",
     ]
 
     for moduleName in (moduleNames + self.options.extraModuleImports).sorted() {

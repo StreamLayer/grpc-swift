@@ -22,7 +22,6 @@
 //
 import GRPC
 import NIO
-import SwiftProtobuf
 
 
 internal final class Codegentest_FooTestClient: Codegentest_FooClientProtocol {

@@ -22,7 +22,6 @@
 //
 import GRPC
 import NIO
-import SwiftProtobuf
 
 
 /// Usage: instantiate A_ServiceAClient, then call methods of this protocol to make API calls.
