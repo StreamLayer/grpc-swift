@@ -18,8 +18,8 @@ workflows:
             set -ex
             rm -rf Carthage ~/Library/Caches/org.carthage.CarthageKit/build
             yarn
-            # 5.1.3+d6c4ba50e84722a815542bda2b6e8a42 is xcode 11.3.1 vesion
-            if [ "$(carthage swift-version)" !=  "5.1.3+d6c4ba50e84722a815542bda2b6e8a42" ]; then
+            # 5.3+df4651b6117805e4aa1fc1bc0670304e is xcode 12.1 vesion
+            if [ "$(carthage swift-version)" !=  "5.3+df4651b6117805e4aa1fc1bc0670304e" ]; then
               echo "Invalid swift version" 1>&2
               exit 1
             fi
