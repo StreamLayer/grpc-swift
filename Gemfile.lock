@@ -19,7 +19,7 @@ PLATFORMS
 
 DEPENDENCIES
   json (~> 2.3)
-  xcodeproj (~> 1.17)
+  xcodeproj (~> 1.19)
 
 BUNDLED WITH
    2.1.4
