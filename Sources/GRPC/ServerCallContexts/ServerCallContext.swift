@@ -16,6 +16,7 @@
 import Foundation
 import Logging
 import NIO
+import NIOHPACK
 import NIOHTTP1
 import SwiftProtobuf
 
@@ -24,8 +25,8 @@ public protocol ServerCallContext: AnyObject {
   /// The event loop this call is served on.
   var eventLoop: EventLoop { get }
 
-  /// Generic metadata provided with this request.
-  var request: HTTPRequestHead { get }
+  /// Request headers for this request.
+  var headers: HPACKHeaders { get }
 
   /// The logger used for this call.
   var logger: Logger { get }
@@ -39,17 +40,61 @@ public protocol ServerCallContext: AnyObject {
 /// Base class providing data provided to the framework user for all server calls.
 open class ServerCallContextBase: ServerCallContext {
   public let eventLoop: EventLoop
-  public let request: HTTPRequestHead
+  public let headers: HPACKHeaders
   public let logger: Logger
   public var compressionEnabled: Bool = true
 
   /// Metadata to return at the end of the RPC. If this is required it should be updated before
   /// the `responsePromise` or `statusPromise` is fulfilled.
-  public var trailingMetadata: HTTPHeaders = HTTPHeaders()
+  public var trailers = HPACKHeaders()
 
+  public init(eventLoop: EventLoop, headers: HPACKHeaders, logger: Logger) {
+    self.eventLoop = eventLoop
+    self.headers = headers
+    self.logger = logger
+  }
+
+  @available(*, deprecated, renamed: "init(eventLoop:headers:logger:)")
   public init(eventLoop: EventLoop, request: HTTPRequestHead, logger: Logger) {
     self.eventLoop = eventLoop
-    self.request = request
+    self.headers = HPACKHeaders(httpHeaders: request.headers, normalizeHTTPHeaders: false)
     self.logger = logger
+  }
+
+  /// Processes an error, transforming it into a 'GRPCStatus' and any trailers to send to the peer.
+  internal func processError(
+    _ error: Error,
+    delegate: ServerErrorDelegate?
+  ) -> (GRPCStatus, HPACKHeaders) {
+    // Observe the error if we have a delegate.
+    delegate?.observeRequestHandlerError(error, headers: self.headers)
+
+    // What status are we terminating this RPC with?
+    // - If we have a delegate, try transforming the error. If the delegate returns trailers, merge
+    //   them with any on the call context.
+    // - If we don't have a delegate, then try to transform the error to a status.
+    // - Fallback to a generic error.
+    let status: GRPCStatus
+    let trailers: HPACKHeaders
+
+    if let transformed = delegate?.transformRequestHandlerError(error, headers: self.headers) {
+      status = transformed.status
+      if var transformedTrailers = transformed.trailers {
+        // The delegate returned trailers: merge in those from the context as well.
+        transformedTrailers.add(contentsOf: self.trailers)
+        trailers = transformedTrailers
+      } else {
+        trailers = self.trailers
+      }
+    } else if let grpcStatusTransformable = error as? GRPCStatusTransformable {
+      status = grpcStatusTransformable.makeGRPCStatus()
+      trailers = self.trailers
+    } else {
+      // Eh... well, we don't what status to use. Use a generic one.
+      status = .processingError
+      trailers = self.trailers
+    }
+
+    return (status, trailers)
   }
 }

@@ -25,7 +25,7 @@ opposed to the core library provided by the [gRPC project][grpc].
 Version | Implementation | Branch                 | `protoc` Plugin         | CocoaPod              | Support
 --------|----------------|------------------------|-------------------------|-----------------------|-----------------------------------------
 1.x     | SwiftNIO       | [`main`][branch-new]   | `protoc-gen-grpc-swift` | [gRPC-Swift][pod-new] | Actively developed and supported
-0.x     | gRPC C library | [`cgrpc`][branch-old]  | `proroc-gen-swiftgrpc`  | [SwiftGRPC][pod-old]  | No longer developed; security fixes only
+0.x     | gRPC C library | [`cgrpc`][branch-old]  | `protoc-gen-swiftgrpc`  | [SwiftGRPC][pod-old]  | No longer developed; security fixes only
 
 The remainder of this README refers to the 1.x version of gRPC Swift.
 
@@ -51,7 +51,7 @@ necessary targets:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.0.0-alpha.12")
+  .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.0.0-alpha.20")
 ]
 ```
 
@@ -96,7 +96,7 @@ gRPC Swift is currently available [from CocoaPods][pod-new]. To integrate, add
 the following line to your `Podfile`:
 
 ```ruby
-    pod 'gRPC-Swift', '~> 1.0.0-alpha.18'
+    pod 'gRPC-Swift', '~> 1.0.0-alpha.20'
 ```
 
 Then, run `pod install` from command line and use your project's generated

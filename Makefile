@@ -24,6 +24,9 @@ XCODEPROJ:=GRPC.xcodeproj
 all:
 	${SWIFT_BUILD}
 
+Package.resolved:
+	${SWIFT_PACKAGE} resolve
+
 .PHONY:
 carthage_project:
 	${SWIFT_PACKAGE} generate-xcodeproj --output ${XCODEPROJ}

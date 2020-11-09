@@ -17,6 +17,7 @@ import Foundation
 import Logging
 import NIO
 import NIOFoundationCompat
+import NIOHPACK
 import NIOHTTP1
 import SwiftProtobuf
 
@@ -24,7 +25,7 @@ import SwiftProtobuf
 ///
 /// - Important: This is **NOT** part of the public API.
 public enum _GRPCServerRequestPart<Request> {
-  case head(HTTPRequestHead)
+  case headers(HPACKHeaders)
   case message(Request)
   case end
 }
@@ -35,9 +36,9 @@ public typealias _RawGRPCServerRequestPart = _GRPCServerRequestPart<ByteBuffer>
 ///
 /// - Important: This is **NOT** part of the public API.
 public enum _GRPCServerResponsePart<Response> {
-  case headers(HTTPHeaders)
+  case headers(HPACKHeaders)
   case message(_MessageContext<Response>)
-  case statusAndTrailers(GRPCStatus, HTTPHeaders)
+  case statusAndTrailers(GRPCStatus, HPACKHeaders)
 }
 
 public typealias _RawGRPCServerResponsePart = _GRPCServerResponsePart<ByteBuffer>
@@ -128,13 +129,21 @@ extension HTTP1ToGRPCServerCodec: ChannelInboundHandler {
   public typealias InboundOut = _RawGRPCServerRequestPart
 
   public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+    let unwrappedData = self.unwrapInboundIn(data)
     if case .ignore = self.inboundState {
-      self.logger.notice("ignoring read data", metadata: ["data": "\(data)"])
+      switch unwrappedData {
+      case let .body(body) where body.readableBytes == 0:
+        break // Ignoring a read of zero bytes is always fine.
+      case .end:
+        break // Ignoring an end stream is not an event worth reporting.
+      default:
+        self.logger.notice("ignoring read data", metadata: ["data": "\(unwrappedData)"])
+      }
       return
     }
 
     do {
-      switch self.unwrapInboundIn(data) {
+      switch unwrappedData {
       case let .head(requestHead):
         self.inboundState = try self.processHead(context: context, requestHead: requestHead)
 
@@ -202,7 +211,7 @@ extension HTTP1ToGRPCServerCodec: ChannelInboundHandler {
 
     case let .unsupported(header, acceptableEncoding):
       let message: String
-      let headers: HTTPHeaders
+      let headers: HPACKHeaders
       if acceptableEncoding.isEmpty {
         message = "compression is not supported"
         headers = .init()
@@ -235,7 +244,9 @@ extension HTTP1ToGRPCServerCodec: ChannelInboundHandler {
       self.responseEncodingHeader = nil
     }
 
-    context.fireChannelRead(self.wrapInboundOut(.head(requestHead)))
+    // We normalize in the 2-to-1 handler.
+    let headers = HPACKHeaders(httpHeaders: requestHead.headers, normalizeHTTPHeaders: false)
+    context.fireChannelRead(self.wrapInboundOut(.headers(headers)))
     return .expectingBody
   }
 
@@ -266,7 +277,7 @@ extension HTTP1ToGRPCServerCodec: ChannelInboundHandler {
         throw GRPCError.Base64DecodeError().captureContext()
       }
 
-      body.writeBytes(decodedData)
+      body.writeContiguousBytes(decodedData)
     }
 
     self.messageReader.append(buffer: &body)
@@ -352,7 +363,7 @@ extension HTTP1ToGRPCServerCodec: ChannelOutboundHandler {
           .wrapOutboundOut(.head(HTTPResponseHead(
             version: version,
             status: .ok,
-            headers: headers
+            headers: HTTPHeaders(headers.map { ($0.name, $0.value) })
           ))),
         promise: promise
       )
@@ -405,7 +416,7 @@ extension HTTP1ToGRPCServerCodec: ChannelOutboundHandler {
       // NIOHTTP2 doesn't support sending a single frame as a "Trailers-Only" response so we still
       // need to loop back and send the request head first.
       if case .expectingHeaders = self.outboundState {
-        self.write(context: context, data: NIOAny(OutboundIn.headers(HTTPHeaders())), promise: nil)
+        self.write(context: context, data: NIOAny(OutboundIn.headers([:])), promise: nil)
       }
 
       var trailers = trailers
@@ -417,7 +428,7 @@ extension HTTP1ToGRPCServerCodec: ChannelOutboundHandler {
       if self.contentType == .webTextProtobuf {
         // Encode the trailers into the response byte stream as a length delimited message, as per
         // https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-WEB.md
-        let textTrailers = trailers.map { name, value in "\(name): \(value)" }
+        let textTrailers = trailers.map { name, value, _ in "\(name): \(value)" }
           .joined(separator: "\r\n")
         var trailersBuffer = context.channel.allocator.buffer(capacity: 5 + textTrailers.utf8.count)
         trailersBuffer.writeInteger(UInt8(0x80))
@@ -455,7 +466,7 @@ extension HTTP1ToGRPCServerCodec: ChannelOutboundHandler {
         let encodedData = accumulatedData.base64EncodedString()
 
         // Reuse our first buffer.
-        responseTextBuffer.clear(minimumCapacity: UInt32(encodedData.utf8.count))
+        responseTextBuffer.clear(minimumCapacity: Int(encodedData.utf8.count))
         responseTextBuffer.writeString(encodedData)
 
         // After collecting all response for gRPC Web connections, send one final aggregated
@@ -466,7 +477,8 @@ extension HTTP1ToGRPCServerCodec: ChannelOutboundHandler {
         )
         context.write(self.wrapOutboundOut(.end(nil)), promise: promise)
       } else {
-        context.write(self.wrapOutboundOut(.end(trailers)), promise: promise)
+        let httpTrailers = HTTPHeaders(trailers.map { ($0.name, $0.value) })
+        context.write(self.wrapOutboundOut(.end(httpTrailers)), promise: promise)
       }
 
       // Log the call duration and status
@@ -563,11 +575,22 @@ struct MessageEncodingHeaderValidator {
         )
       }
 
-    // Compression is disabled and the client sent a message encoding header. We clearly don't
-    // support this. Note this is different to the supported but not advertised case since we have
-    // explicitly not enabled compression.
+    // Compression is disabled and the client sent a message encoding header. We don't support this
+    // unless the header is "identity", which is no compression. Note this is different to the
+    // supported but not advertised case since we have explicitly not enabled compression.
     case let (.disabled, .some(header)):
-      return .unsupported(requestEncoding: header, acceptEncoding: [])
+      guard let algorithm = CompressionAlgorithm(rawValue: header) else {
+        return .unsupported(
+          requestEncoding: header,
+          acceptEncoding: []
+        )
+      }
+
+      if algorithm == .identity {
+        return .noCompression
+      } else {
+        return .unsupported(requestEncoding: header, acceptEncoding: [])
+      }
 
     // The client didn't send a message encoding header.
     case (_, .none):

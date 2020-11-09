@@ -16,6 +16,7 @@
 import Foundation
 import Logging
 import NIO
+import NIOHPACK
 import NIOHTTP1
 import SwiftProtobuf
 
@@ -34,6 +35,12 @@ open class UnaryResponseCallContext<ResponsePayload>: ServerCallContextBase, Sta
   public let responsePromise: EventLoopPromise<ResponsePayload>
   public var responseStatus: GRPCStatus = .ok
 
+  override public init(eventLoop: EventLoop, headers: HPACKHeaders, logger: Logger) {
+    self.responsePromise = eventLoop.makePromise()
+    super.init(eventLoop: eventLoop, headers: headers, logger: logger)
+  }
+
+  @available(*, deprecated, renamed: "init(eventLoop:headers:logger:)")
   override public init(eventLoop: EventLoop, request: HTTPRequestHead, logger: Logger) {
     self.responsePromise = eventLoop.makePromise()
     super.init(eventLoop: eventLoop, request: request, logger: logger)
@@ -51,7 +58,19 @@ open class UnaryResponseCallContext<ResponsePayload>: ServerCallContextBase, Sta
 /// lets us avoid associated-type requirements on the protocol.
 public protocol StatusOnlyCallContext: ServerCallContext {
   var responseStatus: GRPCStatus { get set }
-  var trailingMetadata: HTTPHeaders { get set }
+  var trailers: HPACKHeaders { get set }
+}
+
+extension StatusOnlyCallContext {
+  @available(*, deprecated, renamed: "trailers")
+  public var trailingMetadata: HTTPHeaders {
+    get {
+      return HTTPHeaders(self.trailers.map { ($0.name, $0.value) })
+    }
+    set {
+      self.trailers = HPACKHeaders(httpHeaders: newValue)
+    }
+  }
 }
 
 /// Concrete implementation of `UnaryResponseCallContext` used by our generated code.
@@ -60,62 +79,68 @@ open class UnaryResponseCallContextImpl<ResponsePayload>: UnaryResponseCallConte
 
   /// - Parameters:
   ///   - channel: The NIO channel the call is handled on.
-  ///   - request: The headers provided with this call.
+  ///   - headers: The headers provided with this call.
   ///   - errorDelegate: Provides a means for transforming response promise failures to `GRPCStatusTransformable` before
   ///     sending them to the client.
+  ///   - logger: A logger.
   public init(
+    channel: Channel,
+    headers: HPACKHeaders,
+    errorDelegate: ServerErrorDelegate?,
+    logger: Logger
+  ) {
+    self.channel = channel
+    super.init(eventLoop: channel.eventLoop, headers: headers, logger: logger)
+
+    self.responsePromise.futureResult.whenComplete { [self, weak errorDelegate] result in
+      switch result {
+      case let .success(message):
+        self.handleResponse(message)
+
+      case let .failure(error):
+        self.handleError(error, delegate: errorDelegate)
+      }
+    }
+  }
+
+  /// Handle the response from the service provider.
+  private func handleResponse(_ response: ResponsePayload) {
+    self.channel.write(
+      self.wrap(.message(.init(response, compressed: self.compressionEnabled))),
+      promise: nil
+    )
+
+    self.channel.writeAndFlush(
+      self.wrap(.statusAndTrailers(self.responseStatus, self.trailers)),
+      promise: nil
+    )
+  }
+
+  /// Handle an error from the service provider.
+  private func handleError(_ error: Error, delegate: ServerErrorDelegate?) {
+    let (status, trailers) = self.processError(error, delegate: delegate)
+    self.channel.writeAndFlush(self.wrap(.statusAndTrailers(status, trailers)), promise: nil)
+  }
+
+  /// Wrap the response part in a `NIOAny`. This is useful in order to avoid explicitly spelling
+  /// out `NIOAny(WrappedResponse(...))`.
+  private func wrap(_ response: WrappedResponse) -> NIOAny {
+    return NIOAny(response)
+  }
+
+  @available(*, deprecated, renamed: "init(channel:headers:errorDelegate:logger:)")
+  public convenience init(
     channel: Channel,
     request: HTTPRequestHead,
     errorDelegate: ServerErrorDelegate?,
     logger: Logger
   ) {
-    self.channel = channel
-
-    super.init(eventLoop: channel.eventLoop, request: request, logger: logger)
-
-    responsePromise.futureResult
-      .whenComplete { [self, weak errorDelegate] result in
-        let statusAndMetadata: GRPCStatusAndMetadata
-
-        switch result {
-        case let .success(responseMessage):
-          self.channel.write(
-            NIOAny(
-              WrappedResponse
-                .message(.init(responseMessage, compressed: self.compressionEnabled))
-            ),
-            promise: nil
-          )
-          statusAndMetadata = GRPCStatusAndMetadata(status: self.responseStatus, metadata: nil)
-        case let .failure(error):
-          errorDelegate?.observeRequestHandlerError(error, request: request)
-
-          if let transformed: GRPCStatusAndMetadata = errorDelegate?.transformRequestHandlerError(
-            error,
-            request: request
-          ) {
-            statusAndMetadata = transformed
-          } else if let grpcStatusTransformable = error as? GRPCStatusTransformable {
-            statusAndMetadata = GRPCStatusAndMetadata(
-              status: grpcStatusTransformable.makeGRPCStatus(),
-              metadata: nil
-            )
-          } else {
-            statusAndMetadata = GRPCStatusAndMetadata(status: .processingError, metadata: nil)
-          }
-        }
-
-        if let metadata = statusAndMetadata.metadata {
-          self.trailingMetadata.add(contentsOf: metadata)
-        }
-        self.channel.writeAndFlush(
-          NIOAny(
-            WrappedResponse
-              .statusAndTrailers(statusAndMetadata.status, self.trailingMetadata)
-          ),
-          promise: nil
-        )
-      }
+    self.init(
+      channel: channel,
+      headers: HPACKHeaders(httpHeaders: request.headers, normalizeHTTPHeaders: false),
+      errorDelegate: errorDelegate,
+      logger: logger
+    )
   }
 }
 

@@ -44,6 +44,7 @@ internal class ConnectionManager {
 
     var readyChannelPromise: EventLoopPromise<Channel>
     var candidate: Channel
+    var error: Error?
 
     init(from state: ConnectingState, candidate: Channel) {
       self.configuration = state.configuration
@@ -57,6 +58,7 @@ internal class ConnectionManager {
   internal struct ReadyState {
     var configuration: ClientConnection.Configuration
     var channel: Channel
+    var error: Error?
 
     init(from state: ConnectedState) {
       self.configuration = state.configuration
@@ -69,12 +71,14 @@ internal class ConnectionManager {
     var backoffIterator: ConnectionBackoffIterator?
     var readyChannelPromise: EventLoopPromise<Channel>
     var scheduled: Scheduled<Void>
+    var reason: Error?
 
-    init(from state: ConnectingState, scheduled: Scheduled<Void>) {
+    init(from state: ConnectingState, scheduled: Scheduled<Void>, reason: Error) {
       self.configuration = state.configuration
       self.backoffIterator = state.backoffIterator
       self.readyChannelPromise = state.readyChannelPromise
       self.scheduled = scheduled
+      self.reason = reason
     }
 
     init(from state: ConnectedState, scheduled: Scheduled<Void>) {
@@ -82,6 +86,7 @@ internal class ConnectionManager {
       self.backoffIterator = state.backoffIterator
       self.readyChannelPromise = state.readyChannelPromise
       self.scheduled = scheduled
+      self.reason = state.error
     }
 
     init(from state: ReadyState, scheduled: Scheduled<Void>) {
@@ -89,11 +94,27 @@ internal class ConnectionManager {
       self.backoffIterator = state.configuration.connectionBackoff?.makeIterator()
       self.readyChannelPromise = state.channel.eventLoop.makePromise()
       self.scheduled = scheduled
+      self.reason = state.error
     }
   }
 
   internal struct ShutdownState {
     var closeFuture: EventLoopFuture<Void>
+    /// The reason we are shutdown. Any requests for a `Channel` in this state will be failed with
+    /// this error.
+    var reason: Error
+
+    init(closeFuture: EventLoopFuture<Void>, reason: Error) {
+      self.closeFuture = closeFuture
+      self.reason = reason
+    }
+
+    static func shutdownByUser(closeFuture: EventLoopFuture<Void>) -> ShutdownState {
+      return ShutdownState(
+        closeFuture: closeFuture,
+        reason: GRPCStatus(code: .unavailable, message: "Connection was shutdown by the user")
+      )
+    }
   }
 
   internal enum State {
@@ -164,12 +185,7 @@ internal class ConnectionManager {
       switch self.state {
       case .idle:
         self.monitor.updateState(to: .idle, logger: self.logger)
-
-        // Create a new id; it'll be used for the *next* channel we create.
-        self.channelNumberLock.withLockVoid {
-          self.channelNumber &+= 1
-        }
-        self.logger[metadataKey: MetadataKey.connectionID] = "\(self.connectionIDAndNumber)"
+        self.updateConnectionID()
 
       case .connecting:
         self.monitor.updateState(to: .connecting, logger: self.logger)
@@ -183,6 +199,7 @@ internal class ConnectionManager {
 
       case .transientFailure:
         self.monitor.updateState(to: .transientFailure, logger: self.logger)
+        self.updateConnectionID()
 
       case .shutdown:
         self.monitor.updateState(to: .shutdown, logger: self.logger)
@@ -198,9 +215,20 @@ internal class ConnectionManager {
   private var channelNumber: UInt64
   private var channelNumberLock = Lock()
 
+  private var _connectionIDAndNumber: String {
+    return "\(self.connectionID)/\(self.channelNumber)"
+  }
+
   private var connectionIDAndNumber: String {
     return self.channelNumberLock.withLock {
-      return "\(self.connectionID)/\(self.channelNumber)"
+      return self._connectionIDAndNumber
+    }
+  }
+
+  private func updateConnectionID() {
+    self.channelNumberLock.withLockVoid {
+      self.channelNumber &+= 1
+      self.logger[metadataKey: MetadataKey.connectionID] = "\(self._connectionIDAndNumber)"
     }
   }
 
@@ -280,8 +308,8 @@ internal class ConnectionManager {
       case let .transientFailure(state):
         channel = state.readyChannelPromise.futureResult
 
-      case .shutdown:
-        channel = self.eventLoop.makeFailedFuture(GRPCStatus(code: .unavailable, message: nil))
+      case let .shutdown(state):
+        channel = self.eventLoop.makeFailedFuture(state.reason)
       }
 
       self.logger.debug("vending channel future", metadata: [
@@ -318,11 +346,16 @@ internal class ConnectionManager {
       case let .ready(state):
         channel = state.channel.eventLoop.makeSucceededFuture(state.channel)
 
-      case .transientFailure:
-        channel = self.eventLoop.makeFailedFuture(ChannelError.ioOnClosedChannel)
+      case let .transientFailure(state):
+        // Provide the reason we failed transiently, if we can.
+        let error = state.reason ?? GRPCStatus(
+          code: .unavailable,
+          message: "Connection requested while backing off"
+        )
+        channel = self.eventLoop.makeFailedFuture(error)
 
-      case .shutdown:
-        channel = self.eventLoop.makeFailedFuture(GRPCStatus(code: .unavailable, message: nil))
+      case let .shutdown(state):
+        channel = self.eventLoop.makeFailedFuture(state.reason)
       }
 
       self.logger.debug("vending fast-failing channel future", metadata: [
@@ -344,14 +377,14 @@ internal class ConnectionManager {
       switch self.state {
       // We don't have a channel and we don't want one, easy!
       case .idle:
-        shutdown = ShutdownState(closeFuture: self.eventLoop.makeSucceededFuture(()))
+        shutdown = .shutdownByUser(closeFuture: self.eventLoop.makeSucceededFuture(()))
         self.state = .shutdown(shutdown)
 
       // We're mid-connection: the application doesn't have any 'ready' channels so we'll succeed
       // the shutdown future and deal with any fallout from the connecting channel without the
       // application knowing.
       case let .connecting(state):
-        shutdown = ShutdownState(closeFuture: self.eventLoop.makeSucceededFuture(()))
+        shutdown = .shutdownByUser(closeFuture: self.eventLoop.makeSucceededFuture(()))
         self.state = .shutdown(shutdown)
 
         // Fail the ready channel promise: we're shutting down so even if we manage to successfully
@@ -365,7 +398,7 @@ internal class ConnectionManager {
       // We have an active channel but the application doesn't know about it yet. We'll do the same
       // as for `.connecting`.
       case let .active(state):
-        shutdown = ShutdownState(closeFuture: self.eventLoop.makeSucceededFuture(()))
+        shutdown = .shutdownByUser(closeFuture: self.eventLoop.makeSucceededFuture(()))
         self.state = .shutdown(shutdown)
 
         // Fail the ready channel promise: we're shutting down so even if we manage to successfully
@@ -377,7 +410,7 @@ internal class ConnectionManager {
       // The channel is up and running: the application could be using it. We can close it and
       // return the `closeFuture`.
       case let .ready(state):
-        shutdown = ShutdownState(closeFuture: state.channel.closeFuture)
+        shutdown = .shutdownByUser(closeFuture: state.channel.closeFuture)
         self.state = .shutdown(shutdown)
 
         // We have a channel, close it.
@@ -387,15 +420,16 @@ internal class ConnectionManager {
       // do the same but also cancel any scheduled connection attempts and deal with any fallout
       // if we cancelled too late.
       case let .transientFailure(state):
+        shutdown = .shutdownByUser(closeFuture: self.eventLoop.makeSucceededFuture(()))
+        self.state = .shutdown(shutdown)
+
         // Stop the creation of a new channel, if we can. If we can't then the task to
         // `startConnecting()` will see our new `shutdown` state and ignore the request to connect.
         state.scheduled.cancel()
-        shutdown = ShutdownState(closeFuture: self.eventLoop.makeSucceededFuture(()))
-        self.state = .shutdown(shutdown)
 
         // Fail the ready channel promise: we're shutting down so even if we manage to successfully
         // connect the application shouldn't should have access to the channel.
-        state.readyChannelPromise.fail(GRPCStatus(code: .unavailable, message: nil))
+        state.readyChannelPromise.fail(shutdown.reason)
 
       // We're already shutdown; nothing to do.
       case let .shutdown(state):
@@ -407,6 +441,35 @@ internal class ConnectionManager {
   }
 
   // MARK: - State changes from the channel handler.
+
+  /// The channel caught an error. Hold on to it until the channel becomes inactive, it may provide
+  /// some context.
+  internal func channelError(_ error: Error) {
+    self.eventLoop.preconditionInEventLoop()
+
+    switch self.state {
+    // These cases are purposefully separated: some crash reporting services provide stack traces
+    // which don't include the precondition failure message (which contain the invalid state we were
+    // in). Keeping the cases separate allows us work out the state from the line number.
+    case .idle:
+      self.invalidState()
+
+    case .connecting:
+      self.invalidState()
+
+    case var .active(state):
+      state.error = error
+      self.state = .active(state)
+
+    case var .ready(state):
+      state.error = error
+      self.state = .ready(state)
+
+    // If we've already in one of these states, then additional errors aren't helpful to us.
+    case .transientFailure, .shutdown:
+      ()
+    }
+  }
 
   /// The connecting channel became `active`. Must be called on the `EventLoop`.
   internal func channelActive(channel: Channel) {
@@ -423,7 +486,19 @@ internal class ConnectionManager {
     case .shutdown:
       channel.close(mode: .all, promise: nil)
 
-    case .idle, .active, .ready, .transientFailure:
+    // These cases are purposefully separated: some crash reporting services provide stack traces
+    // which don't include the precondition failure message (which contain the invalid state we were
+    // in). Keeping the cases separate allows us work out the state from the line number.
+    case .idle:
+      self.invalidState()
+
+    case .active:
+      self.invalidState()
+
+    case .ready:
+      self.invalidState()
+
+    case .transientFailure:
       self.invalidState()
     }
   }
@@ -443,8 +518,19 @@ internal class ConnectionManager {
       // No, shutdown instead.
       case .none:
         self.logger.debug("shutting down connection")
-        self.state = .shutdown(ShutdownState(closeFuture: self.eventLoop.makeSucceededFuture(())))
-        active.readyChannelPromise.fail(GRPCStatus(code: .unavailable, message: nil))
+
+        let error = GRPCStatus(
+          code: .unavailable,
+          message: "The connection was dropped and connection re-establishment is disabled"
+        )
+
+        let shutdownState = ShutdownState(
+          closeFuture: self.eventLoop.makeSucceededFuture(()),
+          reason: error
+        )
+
+        self.state = .shutdown(shutdownState)
+        active.readyChannelPromise.fail(error)
 
       // Yes, after some time.
       case let .after(delay):
@@ -461,7 +547,15 @@ internal class ConnectionManager {
       // No, no backoff is configured.
       if ready.configuration.connectionBackoff == nil {
         self.logger.debug("shutting down connection, no reconnect configured/remaining")
-        self.state = .shutdown(ShutdownState(closeFuture: ready.channel.closeFuture))
+        self.state = .shutdown(
+          ShutdownState(
+            closeFuture: ready.channel.closeFuture,
+            reason: GRPCStatus(
+              code: .unavailable,
+              message: "The connection was dropped and a reconnect was not configured"
+            )
+          )
+        )
       } else {
         // Yes, start connecting now. We should go via `transientFailure`, however.
         let scheduled = self.eventLoop.scheduleTask(in: .nanoseconds(0)) {
@@ -479,7 +573,13 @@ internal class ConnectionManager {
     case .shutdown:
       ()
 
-    case .connecting, .transientFailure:
+    // These cases are purposefully separated: some crash reporting services provide stack traces
+    // which don't include the precondition failure message (which contain the invalid state we were
+    // in). Keeping the cases separate allows us work out the state from the line number.
+    case .connecting:
+      self.invalidState()
+
+    case .transientFailure:
       self.invalidState()
     }
   }
@@ -500,7 +600,19 @@ internal class ConnectionManager {
     case .shutdown:
       ()
 
-    case .idle, .transientFailure, .connecting, .ready:
+    // These cases are purposefully separated: some crash reporting services provide stack traces
+    // which don't include the precondition failure message (which contain the invalid state we were
+    // in). Keeping the cases separate allows us work out the state from the line number.
+    case .idle:
+      self.invalidState()
+
+    case .transientFailure:
+      self.invalidState()
+
+    case .connecting:
+      self.invalidState()
+
+    case .ready:
       self.invalidState()
     }
   }
@@ -523,7 +635,22 @@ internal class ConnectionManager {
     case let .ready(state):
       self.state = .idle(IdleState(configuration: state.configuration))
 
-    case .idle, .connecting, .transientFailure, .shutdown:
+    case .shutdown:
+      // This is expected when the connection is closed by the user: when the channel becomes
+      // inactive and there are no outstanding RPCs, 'idle()' will be called instead of
+      // 'channelInactive()'.
+      ()
+
+    // These cases are purposefully separated: some crash reporting services provide stack traces
+    // which don't include the precondition failure message (which contain the invalid state we were
+    // in). Keeping the cases separate allows us work out the state from the line number.
+    case .idle:
+      self.invalidState()
+
+    case .connecting:
+      self.invalidState()
+
+    case .transientFailure:
       self.invalidState()
     }
   }
@@ -541,8 +668,10 @@ extension ConnectionManager {
       // No, shutdown.
       case .none:
         self.logger.debug("shutting down connection, no reconnect configured/remaining")
+        self.state = .shutdown(
+          ShutdownState(closeFuture: self.eventLoop.makeSucceededFuture(()), reason: error)
+        )
         connecting.readyChannelPromise.fail(error)
-        self.state = .shutdown(ShutdownState(closeFuture: self.eventLoop.makeSucceededFuture(())))
 
       // Yes, after a delay.
       case let .after(delay):
@@ -550,8 +679,9 @@ extension ConnectionManager {
         let scheduled = self.eventLoop.scheduleTask(in: .seconds(timeInterval: delay)) {
           self.startConnecting()
         }
-        self
-          .state = .transientFailure(TransientFailureState(from: connecting, scheduled: scheduled))
+        self.state = .transientFailure(
+          TransientFailureState(from: connecting, scheduled: scheduled, reason: error)
+        )
       }
 
     // The application must have called shutdown while we were trying to establish a connection
@@ -560,7 +690,20 @@ extension ConnectionManager {
       ()
 
     // We can't fail to connect if we aren't trying.
-    case .idle, .active, .ready, .transientFailure:
+    //
+    // These cases are purposefully separated: some crash reporting services provide stack traces
+    // which don't include the precondition failure message (which contain the invalid state we were
+    // in). Keeping the cases separate allows us work out the state from the line number.
+    case .idle:
+      self.invalidState()
+
+    case .active:
+      self.invalidState()
+
+    case .ready:
+      self.invalidState()
+
+    case .transientFailure:
       self.invalidState()
     }
   }
@@ -590,7 +733,16 @@ extension ConnectionManager {
     case .shutdown:
       ()
 
-    case .connecting, .active, .ready:
+    // These cases are purposefully separated: some crash reporting services provide stack traces
+    // which don't include the precondition failure message (which contain the invalid state we were
+    // in). Keeping the cases separate allows us work out the state from the line number.
+    case .connecting:
+      self.invalidState()
+
+    case .active:
+      self.invalidState()
+
+    case .ready:
       self.invalidState()
     }
   }

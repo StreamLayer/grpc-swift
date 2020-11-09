@@ -21,3 +21,5 @@ dev/codegen-tests/**/generated/*
 node_modules
 *.framework.zip
 Carthage/
+/scripts/.swiftformat-source/
+Package.resolved

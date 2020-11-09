@@ -138,7 +138,12 @@ internal class ChannelTransport<Request, Response> {
     // If the channel creation fails we need to error the call. Note that we receive an
     // 'activation' from the channel instead of relying on the success of the future.
     channelPromise.futureResult.whenFailure { error in
-      self.handleError(error, promise: nil)
+      if error is GRPCStatus || error is GRPCStatusTransformable {
+        self.handleError(error, promise: nil)
+      } else {
+        // Fallback to something which will mark the RPC as 'unavailable'.
+        self.handleError(ConnectionFailure(reason: error), promise: nil)
+      }
     }
 
     // Schedule the timeout.
@@ -545,13 +550,13 @@ extension ChannelTransport: ClientCallInbound {
         self.responseContainer.lazyTrailingMetadataPromise.succeed(metadata)
 
       case let .status(status):
-        // We're done; cancel the timeout.
-        self.scheduledTimeout?.cancel()
-        self.scheduledTimeout = nil
-
         // We're closed now.
         self.state = .closed
         self.stopTimer(status: status)
+
+        // We're done; cancel the timeout.
+        self.scheduledTimeout?.cancel()
+        self.scheduledTimeout = nil
 
         // We're not really failing the status here; in some cases the server may fast fail, in which
         // case we'll only see trailing metadata and status: we should fail the initial metadata and
@@ -694,5 +699,24 @@ extension _GRPCClientResponsePart {
     case .status:
       return "status"
     }
+  }
+}
+
+// A wrapper for connection errors: we need to be able to preserve the underlying error as
+// well as extract a 'GRPCStatus' with code '.unavailable'.
+private struct ConnectionFailure: Error, GRPCStatusTransformable, CustomStringConvertible {
+  /// The reason the connection failed.
+  var reason: Error
+
+  init(reason: Error) {
+    self.reason = reason
+  }
+
+  var description: String {
+    return String(describing: self.reason)
+  }
+
+  func makeGRPCStatus() -> GRPCStatus {
+    return GRPCStatus(code: .unavailable, message: String(describing: self.reason))
   }
 }
