@@ -1,5 +1,9 @@
 {
-  "branches": ["next", { "name": "5.0.1-swift", "prerelease": true }],
+  "branches": [
+    "next", 
+    { "name": "5.0.1-swift", "prerelease": true },
+    { "name": "xcode-12-1", "prerelease": true}
+  ],
   "plugins": [
     ["@semantic-release/commit-analyzer", {
       "preset": "angular"
