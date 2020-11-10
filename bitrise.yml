@@ -76,7 +76,7 @@ workflows:
             rm -rf Carthage/Build
 
             make carthage_project
-
+            ./carthage.sh bootstrap
             ./carthage.sh build --commitish v$RELEASE_VERSION --cache-builds --archive --archive-output $artifact
 
             git add .
