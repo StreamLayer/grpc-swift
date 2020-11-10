@@ -80,7 +80,7 @@ workflows:
             ./carthage.sh build --commitish v$RELEASE_VERSION --cache-builds --archive --archive-output $artifact
 
             git add .
-            git commit -m "[skip ci] chore: created ${RELEASE_TAG} artifacts"
+            git commit --allow-empty -m "[skip ci] chore: created ${RELEASE_TAG} artifacts"
 
             git tag $RELEASE_TAG
             git remote set-url origin https://${owner}:${GH_TOKEN}@github.com/${owner}/${repo}
