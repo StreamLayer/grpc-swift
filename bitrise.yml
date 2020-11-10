@@ -44,7 +44,7 @@ workflows:
   _xcode:
     envs:
     - artifact: GRPCSwift.framework.zip
-    - owner: streamlayer
+    - owner: StreamLayer
     - repo: grpc-swift
     before_run:
       - _prepare_xcode
@@ -83,7 +83,7 @@ workflows:
             git commit --allow-empty -m "[skip ci] chore: created ${RELEASE_TAG} artifacts"
 
             git tag $RELEASE_TAG
-            git remote set-url origin https://${owner}:${GH_TOKEN}@github.com/${owner}/${repo}
+            git remote set-url origin https://${owner}:${GH_TOKEN}@github.com/${owner}/${repo}.git
             git push origin refs/tags/${RELEASE_TAG}
 
             # find latest release
