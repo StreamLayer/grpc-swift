@@ -88,7 +88,7 @@ workflows:
 
             # find latest release
             ./node_modules/.bin/github-release upload \
-              --owner $owner --repo $repo --token $GH_TOKEN --tag $RELEASE_TAG \
+              --owner $owner --repo $repo --token $GH_TOKEN --tag $RELEASE_TAG --prerelease true \
               $artifact
 
   # trigger xcode 12.1 build
