@@ -9,7 +9,7 @@
       "preset": "angular"
     }],
     ["@semantic-release/exec", {
-      "prepareCmd": "carthage build --commitish v${nextRelease.version} --cache-builds --archive --archive-output GRPCSwift.framework.zip"
+      "prepareCmd": "./carthage.sh build --commitish v${nextRelease.version} --cache-builds --archive --archive-output GRPCSwift.framework.zip"
     }],
     ["@semantic-release/npm", {
       "npmPublish": false
