@@ -77,7 +77,7 @@ workflows:
 
             make carthage_project
             ./carthage.sh bootstrap
-            ./carthage.sh build --commitish v$RELEASE_VERSION --cache-builds --archive --archive-output $artifact
+            ./carthage.sh build --commitish $RELEASE_TAG --cache-builds --archive --archive-output $artifact
 
             git add .
             git commit --allow-empty -m "[skip ci] chore: created ${RELEASE_TAG} artifacts"
