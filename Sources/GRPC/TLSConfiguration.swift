@@ -68,6 +68,9 @@ extension ClientConnection.Configuration {
       }
     }
 
+    /// A custom verification callback that allows completely overriding the certificate verification logic for this connection.
+    public var customVerificationCallback: NIOSSLCustomVerificationCallback?
+
     /// TLS Configuration with suitable defaults for clients.
     ///
     /// This is a wrapper around `NIOSSL.TLSConfiguration` to restrict input to values which comply
@@ -83,12 +86,15 @@ extension ClientConnection.Configuration {
     ///     `.fullVerification`.
     /// - Parameter hostnameOverride: Value to use for TLS SNI extension; this must not be an IP
     ///     address, defaults to `nil`.
+    /// - Parameter customVerificationCallback: A callback to provide to override the certificate verification logic,
+    ///     defaults to `nil`.
     public init(
       certificateChain: [NIOSSLCertificateSource] = [],
       privateKey: NIOSSLPrivateKeySource? = nil,
       trustRoots: NIOSSLTrustRoots = .default,
       certificateVerification: CertificateVerification = .fullVerification,
-      hostnameOverride: String? = nil
+      hostnameOverride: String? = nil,
+      customVerificationCallback: NIOSSLCustomVerificationCallback? = nil
     ) {
       self.configuration = .forClient(
         minimumTLSVersion: .tlsv12,
@@ -96,15 +102,27 @@ extension ClientConnection.Configuration {
         trustRoots: trustRoots,
         certificateChain: certificateChain,
         privateKey: privateKey,
-        applicationProtocols: GRPCApplicationProtocolIdentifier.allCases.map { $0.rawValue }
+        applicationProtocols: GRPCApplicationProtocolIdentifier.client
       )
       self.hostnameOverride = hostnameOverride
+      self.customVerificationCallback = customVerificationCallback
     }
 
     /// Creates a TLS Configuration using the given `NIOSSL.TLSConfiguration`.
+    ///
+    /// - Note: If no ALPN tokens are set in `configuration.applicationProtocols` then "grpc-exp"
+    ///   and "h2" will be used.
+    /// - Parameters:
+    ///   - configuration: The `NIOSSL.TLSConfiguration` to base this configuration on.
+    ///   - hostnameOverride: The hostname override to use for the TLS SNI extension.
     public init(configuration: TLSConfiguration, hostnameOverride: String? = nil) {
       self.configuration = configuration
       self.hostnameOverride = hostnameOverride
+
+      // Set the ALPN tokens if none were set.
+      if self.configuration.applicationProtocols.isEmpty {
+        self.configuration.applicationProtocols = GRPCApplicationProtocolIdentifier.client
+      }
     }
   }
 }
@@ -117,6 +135,10 @@ extension Server.Configuration {
   /// specification.
   public struct TLS {
     public private(set) var configuration: TLSConfiguration
+
+    /// Whether ALPN is required. Disabling this option may be useful in cases where ALPN is not
+    /// supported.
+    public var requireALPN: Bool = true
 
     /// The certificates to offer during negotiation. If not present, no certificates will be
     /// offered.
@@ -171,11 +193,13 @@ extension Server.Configuration {
     ///     root provided by the platform.
     /// - Parameter certificateVerification: Whether to verify the remote certificate. Defaults to
     ///     `.none`.
+    /// - Parameter requireALPN: Whether ALPN is required or not.
     public init(
       certificateChain: [NIOSSLCertificateSource],
       privateKey: NIOSSLPrivateKeySource,
       trustRoots: NIOSSLTrustRoots = .default,
-      certificateVerification: CertificateVerification = .none
+      certificateVerification: CertificateVerification = .none,
+      requireALPN: Bool = true
     ) {
       self.configuration = .forServer(
         certificateChain: certificateChain,
@@ -183,13 +207,25 @@ extension Server.Configuration {
         minimumTLSVersion: .tlsv12,
         certificateVerification: certificateVerification,
         trustRoots: trustRoots,
-        applicationProtocols: GRPCApplicationProtocolIdentifier.allCases.map { $0.rawValue }
+        applicationProtocols: GRPCApplicationProtocolIdentifier.server
       )
+      self.requireALPN = requireALPN
     }
 
     /// Creates a TLS Configuration using the given `NIOSSL.TLSConfiguration`.
-    public init(configuration: TLSConfiguration) {
+    /// - Note: If no ALPN tokens are set in `configuration.applicationProtocols` then the tokens
+    ///  "grpc-exp", "h2" and "http/1.1" will be used.
+    /// - Parameters:
+    ///   - configuration: The `NIOSSL.TLSConfiguration` to base this configuration on.
+    ///   - requireALPN: Whether ALPN is required.
+    public init(configuration: TLSConfiguration, requireALPN: Bool = true) {
       self.configuration = configuration
+      self.requireALPN = requireALPN
+
+      // Set the ALPN tokens if none were set.
+      if self.configuration.applicationProtocols.isEmpty {
+        self.configuration.applicationProtocols = GRPCApplicationProtocolIdentifier.server
+      }
     }
   }
 }

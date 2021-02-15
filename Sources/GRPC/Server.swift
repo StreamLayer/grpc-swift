@@ -16,6 +16,7 @@
 import Foundation
 import Logging
 import NIO
+import NIOExtras
 import NIOHTTP1
 import NIOHTTP2
 import NIOSSL
@@ -26,11 +27,11 @@ import NIOTransportServices
 /// The pipeline is configured in three stages detailed below. Note: handlers marked with
 /// a '*' are responsible for handling errors.
 ///
-/// 1. Initial stage, prior to HTTP protocol detection.
+/// 1. Initial stage, prior to pipeline configuration.
 ///
-///                           ┌───────────────────────────┐
-///                           │   HTTPProtocolSwitcher*   │
-///                           └─▲───────────────────────┬─┘
+///                        ┌─────────────────────────────────┐
+///                        │ GRPCServerPipelineConfigurator* │
+///                        └────▲───────────────────────┬────┘
 ///                   ByteBuffer│                       │ByteBuffer
 ///                           ┌─┴───────────────────────▼─┐
 ///                           │       NIOSSLHandler       │
@@ -39,19 +40,19 @@ import NIOTransportServices
 ///                             │                       ▼
 ///
 ///    The `NIOSSLHandler` is optional and depends on how the framework user has configured
-///    their server. The `HTTPProtocolSwitcher` detects which HTTP version is being used and
+///    their server. The `GRPCServerPipelineConfigurator` detects which HTTP version is being used
+///    (via ALPN if TLS is used or by parsing the first bytes on the connection otherwise) and
 ///    configures the pipeline accordingly.
 ///
 /// 2. HTTP version detected. "HTTP Handlers" depends on the HTTP version determined by
-///    `HTTPProtocolSwitcher`. All of these handlers are provided by NIO except for the
-///    `WebCORSHandler` which is used for HTTP/1.
+///    `GRPCServerPipelineConfigurator`. In the case of HTTP/2:
 ///
 ///                           ┌─────────────────────────────────┐
-///                           │ GRPCServerRequestRoutingHandler │
+///                           │      HTTP2StreamMultiplexer     │
 ///                           └─▲─────────────────────────────┬─┘
-///        HTTPServerRequestPart│                             │HTTPServerResponsePart
+///                   HTTP2Frame│                             │HTTP2Frame
 ///                           ┌─┴─────────────────────────────▼─┐
-///                           │          HTTP Handlers          │
+///                           │           HTTP2Handler          │
 ///                           └─▲─────────────────────────────┬─┘
 ///                   ByteBuffer│                             │ByteBuffer
 ///                           ┌─┴─────────────────────────────▼─┐
@@ -60,28 +61,20 @@ import NIOTransportServices
 ///                   ByteBuffer│                             │ByteBuffer
 ///                             │                             ▼
 ///
-///    The `GRPCServerRequestRoutingHandler` resolves the request head and configures the rest of
-///    the pipeline based on the RPC call being made.
+///    The `HTTP2StreamMultiplexer` provides one `Channel` for each HTTP/2 stream (and thus each
+///    RPC).
 ///
-/// 3. The call has been resolved and is a function that this server can handle. Responses are
-///    written into `BaseCallHandler` by a user-implemented `CallHandlerProvider`.
+/// 3. The frames for each stream channel are routed by the `HTTP2ToRawGRPCServerCodec` handler to
+///    a handler containing the user-implemented logic provided by a `CallHandlerProvider`:
 ///
 ///                           ┌─────────────────────────────────┐
 ///                           │         BaseCallHandler*        │
 ///                           └─▲─────────────────────────────┬─┘
-///    GRPCServerRequestPart<T1>│                             │GRPCServerResponsePart<T2>
+///        GRPCServerRequestPart│                             │GRPCServerResponsePart
 ///                           ┌─┴─────────────────────────────▼─┐
-///                           │      HTTP1ToGRPCServerCodec     │
+///                           │    HTTP2ToRawGRPCServerCodec    │
 ///                           └─▲─────────────────────────────┬─┘
-///        HTTPServerRequestPart│                             │HTTPServerResponsePart
-///                           ┌─┴─────────────────────────────▼─┐
-///                           │          HTTP Handlers          │
-///                           └─▲─────────────────────────────┬─┘
-///                   ByteBuffer│                             │ByteBuffer
-///                           ┌─┴─────────────────────────────▼─┐
-///                           │          NIOSSLHandler          │
-///                           └─▲─────────────────────────────┬─┘
-///                   ByteBuffer│                             │ByteBuffer
+///      HTTP2Frame.FramePayload│                             │HTTP2Frame.FramePayload
 ///                             │                             ▼
 ///
 public final class Server {
@@ -103,35 +96,20 @@ public final class Server {
       )
       // Set the handlers that are applied to the accepted Channels
       .childChannelInitializer { channel in
-        var logger = configuration.logger
-        logger[metadataKey: MetadataKey.connectionID] = "\(UUID().uuidString)"
-        logger[metadataKey: MetadataKey.remoteAddress] = channel.remoteAddress
+        var configuration = configuration
+        configuration.logger[metadataKey: MetadataKey.connectionID] = "\(UUID().uuidString)"
+        configuration.logger[metadataKey: MetadataKey.remoteAddress] = channel.remoteAddress
           .map { "\($0)" } ?? "n/a"
 
-        let protocolSwitcher = HTTPProtocolSwitcher(
-          errorDelegate: configuration.errorDelegate,
-          httpTargetWindowSize: configuration.httpTargetWindowSize,
-          keepAlive: configuration.connectionKeepalive,
-          idleTimeout: configuration.connectionIdleTimeout,
-          logger: logger
-        ) { (channel, logger) -> EventLoopFuture<Void> in
-          let handler = GRPCServerRequestRoutingHandler(
-            servicesByName: configuration.serviceProvidersByName,
-            encoding: configuration.messageEncoding,
-            errorDelegate: configuration.errorDelegate,
-            logger: logger
-          )
-          return channel.pipeline.addHandler(handler)
-        }
-
         var configured: EventLoopFuture<Void>
+        let configurator = GRPCServerPipelineConfigurator(configuration: configuration)
 
         if let tls = configuration.tls {
           configured = channel.configureTLS(configuration: tls).flatMap {
-            channel.pipeline.addHandler(protocolSwitcher)
+            channel.pipeline.addHandler(configurator)
           }
         } else {
-          configured = channel.pipeline.addHandler(protocolSwitcher)
+          configured = channel.pipeline.addHandler(configurator)
         }
 
         // Work around the zero length write issue, if needed.
@@ -167,18 +145,33 @@ public final class Server {
   /// Starts a server with the given configuration. See `Server.Configuration` for the options
   /// available to configure the server.
   public static func start(configuration: Configuration) -> EventLoopFuture<Server> {
+    let quiescingHelper = ServerQuiescingHelper(group: configuration.eventLoopGroup)
+
     return self.makeBootstrap(configuration: configuration)
+      .serverChannelInitializer { channel in
+        channel.pipeline.addHandler(quiescingHelper.makeServerChannelHandler(channel: channel))
+      }
       .bind(to: configuration.target)
       .map { channel in
-        Server(channel: channel, errorDelegate: configuration.errorDelegate)
+        Server(
+          channel: channel,
+          quiescingHelper: quiescingHelper,
+          errorDelegate: configuration.errorDelegate
+        )
       }
   }
 
   public let channel: Channel
+  private let quiescingHelper: ServerQuiescingHelper
   private var errorDelegate: ServerErrorDelegate?
 
-  private init(channel: Channel, errorDelegate: ServerErrorDelegate?) {
+  private init(
+    channel: Channel,
+    quiescingHelper: ServerQuiescingHelper,
+    errorDelegate: ServerErrorDelegate?
+  ) {
     self.channel = channel
+    self.quiescingHelper = quiescingHelper
 
     // Maintain a strong reference to ensure it lives as long as the server.
     self.errorDelegate = errorDelegate
@@ -200,7 +193,26 @@ public final class Server {
     return self.channel.closeFuture
   }
 
-  /// Shut down the server; this should be called to avoid leaking resources.
+  /// Initiates a graceful shutdown. Existing RPCs may run to completion, any new RPCs or
+  /// connections will be rejected.
+  public func initiateGracefulShutdown(promise: EventLoopPromise<Void>?) {
+    self.quiescingHelper.initiateShutdown(promise: promise)
+  }
+
+  /// Initiates a graceful shutdown. Existing RPCs may run to completion, any new RPCs or
+  /// connections will be rejected.
+  public func initiateGracefulShutdown() -> EventLoopFuture<Void> {
+    let promise = self.channel.eventLoop.makePromise(of: Void.self)
+    self.initiateGracefulShutdown(promise: promise)
+    return promise.futureResult
+  }
+
+  /// Shutdown the server immediately. Active RPCs and connections will be terminated.
+  public func close(promise: EventLoopPromise<Void>?) {
+    self.channel.close(mode: .all, promise: promise)
+  }
+
+  /// Shutdown the server immediately. Active RPCs and connections will be terminated.
   public func close() -> EventLoopFuture<Void> {
     return self.channel.close(mode: .all)
   }
@@ -274,7 +286,7 @@ extension Server {
     ///
     /// This is how gRPC consumes the service providers internally. Caching this as stored data avoids
     /// the need to recalculate this dictionary each time we receive an rpc.
-    fileprivate private(set) var serviceProvidersByName: [Substring: CallHandlerProvider]
+    internal var serviceProvidersByName: [Substring: CallHandlerProvider]
 
     /// Create a `Configuration` with some pre-defined defaults.
     ///

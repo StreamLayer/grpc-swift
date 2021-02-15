@@ -104,7 +104,10 @@ func uniqueOutputFileName(
 
 func main() throws {
   // initialize responses
-  var response = Google_Protobuf_Compiler_CodeGeneratorResponse()
+  var response = Google_Protobuf_Compiler_CodeGeneratorResponse(
+    files: [],
+    supportedFeatures: [.proto3Optional]
+  )
 
   // read plugin input
   let rawRequest = try Stdin.readall()
@@ -116,17 +119,20 @@ func main() throws {
   let descriptorSet = DescriptorSet(protos: request.protoFile)
 
   // Only generate output for services.
-  for fileDescriptor in descriptorSet.files where !fileDescriptor.services.isEmpty {
-    let grpcFileName = uniqueOutputFileName(
-      component: "grpc",
-      fileDescriptor: fileDescriptor,
-      fileNamingOption: options.fileNaming
-    )
-    let grpcGenerator = Generator(fileDescriptor, options: options)
-    var grpcFile = Google_Protobuf_Compiler_CodeGeneratorResponse.File()
-    grpcFile.name = grpcFileName
-    grpcFile.content = grpcGenerator.code
-    response.file.append(grpcFile)
+  for name in request.fileToGenerate {
+    let fileDescriptor = descriptorSet.lookupFileDescriptor(protoName: name)
+    if !fileDescriptor.services.isEmpty {
+      let grpcFileName = uniqueOutputFileName(
+        component: "grpc",
+        fileDescriptor: fileDescriptor,
+        fileNamingOption: options.fileNaming
+      )
+      let grpcGenerator = Generator(fileDescriptor, options: options)
+      var grpcFile = Google_Protobuf_Compiler_CodeGeneratorResponse.File()
+      grpcFile.name = grpcFileName
+      grpcFile.content = grpcGenerator.code
+      response.file.append(grpcFile)
+    }
   }
 
   // return everything to the caller

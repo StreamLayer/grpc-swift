@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import ArgumentParser
 import EchoImplementation
 import EchoModel
 import Foundation
@@ -24,111 +25,81 @@ import NIOSSL
 
 // MARK: - Argument parsing
 
-enum RPC: String {
+enum RPC: String, ExpressibleByArgument {
   case get
   case collect
   case expand
   case update
 }
 
-enum Command {
-  case server(port: Int, useTLS: Bool)
-  case client(host: String, port: Int, useTLS: Bool, rpc: RPC, message: String)
+struct Echo: ParsableCommand {
+  static var configuration = CommandConfiguration(
+    abstract: "An example to run and call a simple gRPC service for echoing messages.",
+    subcommands: [Server.self, Client.self]
+  )
 
-  init?(from args: [String]) {
-    guard !args.isEmpty else {
-      return nil
-    }
+  struct Server: ParsableCommand {
+    static var configuration = CommandConfiguration(
+      abstract: "Start a gRPC server providing the Echo service."
+    )
 
-    var args = args
-    switch args.removeFirst() {
-    case "server":
-      guard args.count == 1 || args.count == 2,
-        let port = args.popLast().flatMap(Int.init),
-        let useTLS = Command.parseTLSArg(args.popLast())
-      else {
-        return nil
+    @Option(help: "The port to listen on for new connections")
+    var port = 1234
+
+    @Flag(help: "Whether TLS should be used or not")
+    var tls = false
+
+    func run() throws {
+      let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+      defer {
+        try! group.syncShutdownGracefully()
       }
-      self = .server(port: port, useTLS: useTLS)
-
-    case "client":
-      guard args.count == 4 || args.count == 5,
-        let message = args.popLast(),
-        let rpc = args.popLast().flatMap(RPC.init),
-        let port = args.popLast().flatMap(Int.init),
-        let host = args.popLast(),
-        let useTLS = Command.parseTLSArg(args.popLast())
-      else {
-        return nil
+      do {
+        try startEchoServer(group: group, port: self.port, useTLS: self.tls)
+      } catch {
+        print("Error running server: \(error)")
       }
-      self = .client(host: host, port: port, useTLS: useTLS, rpc: rpc, message: message)
-
-    default:
-      return nil
     }
   }
 
-  private static func parseTLSArg(_ arg: String?) -> Bool? {
-    switch arg {
-    case .some("--tls"):
-      return true
-    case .none, .some("--notls"):
-      return false
-    default:
-      return nil
+  struct Client: ParsableCommand {
+    static var configuration = CommandConfiguration(
+      abstract: "Calls an RPC on the Echo server."
+    )
+
+    @Option(help: "The port to connect to")
+    var port = 1234
+
+    @Flag(help: "Whether TLS should be used or not")
+    var tls = false
+
+    @Flag(help: "Whether interceptors should be used, see 'docs/interceptors-tutorial.md'.")
+    var intercept = false
+
+    @Option(help: "RPC to call ('get', 'collect', 'expand', 'update').")
+    var rpc: RPC = .get
+
+    @Argument(help: "Message to echo")
+    var message: String
+
+    func run() throws {
+      let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+      defer {
+        try! group.syncShutdownGracefully()
+      }
+
+      let client = makeClient(
+        group: group,
+        port: self.port,
+        useTLS: self.tls,
+        useInterceptor: self.intercept
+      )
+      defer {
+        try! client.channel.close().wait()
+      }
+
+      callRPC(self.rpc, using: client, message: self.message)
     }
-  }
-}
-
-func printUsageAndExit(program: String) -> Never {
-  print("""
-  Usage: \(program) COMMAND [OPTIONS...]
-
-  Commands:
-    server [--tls|--notls] PORT                     Starts the echo server on the given port.
-
-    client [--tls|--notls] HOST PORT RPC MESSAGE    Connects to the echo server on the given host
-                                                    host and port and calls the RPC with the
-                                                    provided message. See below for a list of
-                                                    possible RPCs.
-
-  RPCs:
-    * get      (unary)
-    * collect  (client streaming)
-    * expand   (server streaming)
-    * update   (bidirectional streaming)
-  """)
-  exit(1)
-}
-
-func main(args: [String]) {
-  var args = args
-  let program = args.removeFirst()
-  guard let command = Command(from: args) else {
-    printUsageAndExit(program: program)
-  }
-
-  // Okay, we're nearly ready to start, create an `EventLoopGroup` most suitable for our platform.
-  let group = PlatformSupport.makeEventLoopGroup(loopCount: 1)
-  defer {
-    try! group.syncShutdownGracefully()
-  }
-
-  // Now run the server/client.
-  switch command {
-  case let .server(port: port, useTLS: useTLS):
-    do {
-      try startEchoServer(group: group, port: port, useTLS: useTLS)
-    } catch {
-      print("Error running server: \(error)")
-    }
-
-  case let .client(host: host, port: port, useTLS: useTLS, rpc: rpc, message: message):
-    let client = makeClient(group: group, host: host, port: port, useTLS: useTLS)
-    defer {
-      try! client.channel.close().wait()
-    }
-    callRPC(rpc, using: client, message: message)
   }
 }
 
@@ -169,7 +140,12 @@ func startEchoServer(group: EventLoopGroup, port: Int, useTLS: Bool) throws {
   try server.onClose.wait()
 }
 
-func makeClient(group: EventLoopGroup, host: String, port: Int, useTLS: Bool) -> Echo_EchoClient {
+func makeClient(
+  group: EventLoopGroup,
+  port: Int,
+  useTLS: Bool,
+  useInterceptor: Bool
+) -> Echo_EchoClient {
   let builder: ClientConnection.Builder
 
   if useTLS {
@@ -190,8 +166,12 @@ func makeClient(group: EventLoopGroup, host: String, port: Int, useTLS: Bool) ->
   }
 
   // Start the connection and create the client:
-  let connection = builder.connect(host: host, port: port)
-  return Echo_EchoClient(channel: connection)
+  let connection = builder.connect(host: "localhost", port: port)
+
+  return Echo_EchoClient(
+    channel: connection,
+    interceptors: useInterceptor ? ExampleClientInterceptorFactory() : nil
+  )
 }
 
 func callRPC(_ rpc: RPC, using client: Echo_EchoClient, message: String) {
@@ -291,4 +271,4 @@ func echoUpdate(client: Echo_EchoClient, message: String) throws {
   print("update completed with status: \(status.code)")
 }
 
-main(args: CommandLine.arguments)
+Echo.main()

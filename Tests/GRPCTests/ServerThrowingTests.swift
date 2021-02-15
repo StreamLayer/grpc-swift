@@ -32,6 +32,8 @@ let transformedMetadata = HPACKHeaders([("transformed", "header")])
 // to the channel. We want to test that case as well as the one where we throw only _after_ the handler has been added
 // to the channel.
 class ImmediateThrowingEchoProvider: Echo_EchoProvider {
+  var interceptors: Echo_EchoServerInterceptorFactoryProtocol? { return nil }
+
   func get(request: Echo_EchoRequest,
            context: StatusOnlyCallContext) -> EventLoopFuture<Echo_EchoResponse> {
     return context.eventLoop.makeFailedFuture(thrownError)
@@ -65,6 +67,8 @@ extension EventLoop {
 
 /// See `ImmediateThrowingEchoProvider`.
 class DelayedThrowingEchoProvider: Echo_EchoProvider {
+  let interceptors: Echo_EchoServerInterceptorFactoryProtocol? = nil
+
   func get(request: Echo_EchoRequest,
            context: StatusOnlyCallContext) -> EventLoopFuture<Echo_EchoResponse> {
     return context.eventLoop.makeFailedFuture(thrownError, delay: 0.01)
@@ -153,7 +157,12 @@ extension ServerThrowingTests {
   func testUnary() throws {
     let call = client.get(Echo_EchoRequest(text: "foo"))
     XCTAssertEqual(self.expectedError, try call.status.wait())
-    XCTAssertEqual(self.expectedMetadata, try call.trailingMetadata.wait())
+    let trailers = try call.trailingMetadata.wait()
+    if let expected = self.expectedMetadata {
+      for (name, value, _) in expected {
+        XCTAssertTrue(trailers[name].contains(value))
+      }
+    }
     XCTAssertThrowsError(try call.response.wait()) {
       XCTAssertEqual(expectedError, $0 as? GRPCStatus)
     }
@@ -164,7 +173,12 @@ extension ServerThrowingTests {
     // This is racing with the server error; it might fail, it might not.
     try? call.sendEnd().wait()
     XCTAssertEqual(self.expectedError, try call.status.wait())
-    XCTAssertEqual(self.expectedMetadata, try call.trailingMetadata.wait())
+    let trailers = try call.trailingMetadata.wait()
+    if let expected = self.expectedMetadata {
+      for (name, value, _) in expected {
+        XCTAssertTrue(trailers[name].contains(value))
+      }
+    }
 
     if type(of: self.makeEchoProvider()) != ErrorReturningEchoProvider.self {
       // With `ErrorReturningEchoProvider` we actually _return_ a response, which means that the `response` future
@@ -180,7 +194,12 @@ extension ServerThrowingTests {
       .expand(Echo_EchoRequest(text: "foo")) { XCTFail("no message expected, got \($0)") }
     // Nothing to throw here, but the `status` should be the expected error.
     XCTAssertEqual(self.expectedError, try call.status.wait())
-    XCTAssertEqual(self.expectedMetadata, try call.trailingMetadata.wait())
+    let trailers = try call.trailingMetadata.wait()
+    if let expected = self.expectedMetadata {
+      for (name, value, _) in expected {
+        XCTAssertTrue(trailers[name].contains(value))
+      }
+    }
   }
 
   func testBidirectionalStreaming() throws {
@@ -189,6 +208,11 @@ extension ServerThrowingTests {
     try? call.sendEnd().wait()
     // Nothing to throw here, but the `status` should be the expected error.
     XCTAssertEqual(self.expectedError, try call.status.wait())
-    XCTAssertEqual(self.expectedMetadata, try call.trailingMetadata.wait())
+    let trailers = try call.trailingMetadata.wait()
+    if let expected = self.expectedMetadata {
+      for (name, value, _) in expected {
+        XCTAssertTrue(trailers[name].contains(value))
+      }
+    }
   }
 }

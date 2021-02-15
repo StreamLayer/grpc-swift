@@ -28,7 +28,7 @@ and other tutorials):
 
 ```sh
 $ # Clone the repository at the latest release to get the example code:
-$ git clone -b 1.0.0-alpha.20 https://github.com/grpc/grpc-swift
+$ git clone -b 1.0.0 https://github.com/grpc/grpc-swift
 $ # Navigate to the repository
 $ cd grpc-swift/
 ```
@@ -41,14 +41,12 @@ From the `grpc-swift` directory:
 
    ```sh
    $ swift run HelloWorldServer
-   server started on port 52200
-   $ # Note: the port may be different on your machine.
    ```
 
 2. In another terminal, compile and run the client
 
    ```sh
-   $ swift run HelloWorldClient 52200
+   $ swift run HelloWorldClient
    Greeter received: Hello stranger!
    ```
 
@@ -201,14 +199,12 @@ Just like we did before, from the top level `grpc-swift` directory:
 
    ```sh
    $ swift run HelloWorldServer
-   server started on port 52416
-   $ # Note: the port may be different on your machine.
    ```
 
 2. In another terminal, compile and run the client
 
    ```sh
-   $ swift run HelloWorldClient 52416
+   $ swift run HelloWorldClient
    Greeter received: Hello stranger!
    Greeter received: Hello again stranger!
    ```

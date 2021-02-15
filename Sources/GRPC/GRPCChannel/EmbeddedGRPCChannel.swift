@@ -54,137 +54,45 @@ class EmbeddedGRPCChannel: GRPCChannel {
     self.errorDelegate = errorDelegate
   }
 
-  private func makeRequestHead(path: String, options: CallOptions) -> _GRPCRequestHead {
-    return _GRPCRequestHead(
-      scheme: self.scheme,
+  internal func makeCall<Request: Message, Response: Message>(
+    path: String,
+    type: GRPCCallType,
+    callOptions: CallOptions,
+    interceptors: [ClientInterceptor<Request, Response>]
+  ) -> Call<Request, Response> {
+    return Call(
       path: path,
-      host: self.authority,
-      options: options,
-      requestID: nil
+      type: type,
+      eventLoop: self.eventLoop,
+      options: callOptions,
+      interceptors: interceptors,
+      transportFactory: .http2(
+        multiplexer: self.multiplexer,
+        authority: self.authority,
+        scheme: self.scheme,
+        errorDelegate: self.errorDelegate
+      )
     )
   }
 
-  internal func makeUnaryCall<Request: SwiftProtobuf.Message, Response: SwiftProtobuf.Message>(
+  internal func makeCall<Request: GRPCPayload, Response: GRPCPayload>(
     path: String,
-    request: Request,
-    callOptions: CallOptions
-  ) -> UnaryCall<Request, Response> {
-    let call = UnaryCall<Request, Response>.makeOnHTTP2Stream(
-      multiplexer: self.multiplexer,
-      serializer: ProtobufSerializer(),
-      deserializer: ProtobufDeserializer(),
-      callOptions: callOptions,
-      errorDelegate: self.errorDelegate,
-      logger: self.logger
-    )
-
-    call.send(self.makeRequestHead(path: path, options: callOptions), request: request)
-
-    return call
-  }
-
-  internal func makeClientStreamingCall<
-    Request: SwiftProtobuf.Message,
-    Response: SwiftProtobuf.Message
-  >(
-    path: String,
-    callOptions: CallOptions
-  ) -> ClientStreamingCall<Request, Response> {
-    let call = ClientStreamingCall<Request, Response>.makeOnHTTP2Stream(
-      multiplexer: self.multiplexer,
-      serializer: ProtobufSerializer(),
-      deserializer: ProtobufDeserializer(),
-      callOptions: callOptions,
-      errorDelegate: self.errorDelegate,
-      logger: self.logger
-    )
-
-    call.sendHead(self.makeRequestHead(path: path, options: callOptions))
-
-    return call
-  }
-
-  internal func makeServerStreamingCall<
-    Request: SwiftProtobuf.Message,
-    Response: SwiftProtobuf.Message
-  >(
-    path: String,
-    request: Request,
+    type: GRPCCallType,
     callOptions: CallOptions,
-    handler: @escaping (Response) -> Void
-  ) -> ServerStreamingCall<Request, Response> {
-    let call = ServerStreamingCall<Request, Response>.makeOnHTTP2Stream(
-      multiplexer: self.multiplexer,
-      serializer: ProtobufSerializer(),
-      deserializer: ProtobufDeserializer(),
-      callOptions: callOptions,
-      errorDelegate: self.errorDelegate,
-      logger: self.logger,
-      responseHandler: handler
+    interceptors: [ClientInterceptor<Request, Response>]
+  ) -> Call<Request, Response> {
+    return Call(
+      path: path,
+      type: type,
+      eventLoop: self.eventLoop,
+      options: callOptions,
+      interceptors: interceptors,
+      transportFactory: .http2(
+        multiplexer: self.multiplexer,
+        authority: self.authority,
+        scheme: self.scheme,
+        errorDelegate: self.errorDelegate
+      )
     )
-
-    call.send(self.makeRequestHead(path: path, options: callOptions), request: request)
-
-    return call
-  }
-
-  internal func makeBidirectionalStreamingCall<
-    Request: SwiftProtobuf.Message,
-    Response: SwiftProtobuf.Message
-  >(
-    path: String,
-    callOptions: CallOptions,
-    handler: @escaping (Response) -> Void
-  ) -> BidirectionalStreamingCall<Request, Response> {
-    let call = BidirectionalStreamingCall<Request, Response>.makeOnHTTP2Stream(
-      multiplexer: self.multiplexer,
-      serializer: ProtobufSerializer(),
-      deserializer: ProtobufDeserializer(),
-      callOptions: callOptions,
-      errorDelegate: self.errorDelegate,
-      logger: self.logger,
-      responseHandler: handler
-    )
-
-    call.sendHead(self.makeRequestHead(path: path, options: callOptions))
-
-    return call
-  }
-}
-
-extension EmbeddedGRPCChannel {
-  // We need these to conform to `GRPCChannel`. This class is internal and only used for tests so
-  // it's okay that they're unimplemented for now.
-
-  internal func makeUnaryCall<Request: GRPCPayload, Response: GRPCPayload>(
-    path: String,
-    request: Request,
-    callOptions: CallOptions
-  ) -> UnaryCall<Request, Response> {
-    fatalError("Not implemented")
-  }
-
-  internal func makeClientStreamingCall<Request: GRPCPayload, Response: GRPCPayload>(
-    path: String,
-    callOptions: CallOptions
-  ) -> ClientStreamingCall<Request, Response> {
-    fatalError("Not implemented")
-  }
-
-  internal func makeServerStreamingCall<Request: GRPCPayload, Response: GRPCPayload>(
-    path: String,
-    request: Request,
-    callOptions: CallOptions,
-    handler: @escaping (Response) -> Void
-  ) -> ServerStreamingCall<Request, Response> {
-    fatalError("Not implemented")
-  }
-
-  internal func makeBidirectionalStreamingCall<Request: GRPCPayload, Response: GRPCPayload>(
-    path: String,
-    callOptions: CallOptions,
-    handler: @escaping (Response) -> Void
-  ) -> BidirectionalStreamingCall<Request, Response> {
-    fatalError("Not implemented")
   }
 }

@@ -25,8 +25,11 @@ import NIO
 import SwiftProtobuf
 
 
-/// Usage: instantiate Echo_EchoClient, then call methods of this protocol to make API calls.
+/// Usage: instantiate `Echo_EchoClient`, then call methods of this protocol to make API calls.
 public protocol Echo_EchoClientProtocol: GRPCClient {
+  var serviceName: String { get }
+  var interceptors: Echo_EchoClientInterceptorFactoryProtocol? { get }
+
   func get(
     _ request: Echo_EchoRequest,
     callOptions: CallOptions?
@@ -46,10 +49,12 @@ public protocol Echo_EchoClientProtocol: GRPCClient {
     callOptions: CallOptions?,
     handler: @escaping (Echo_EchoResponse) -> Void
   ) -> BidirectionalStreamingCall<Echo_EchoRequest, Echo_EchoResponse>
-
 }
 
 extension Echo_EchoClientProtocol {
+  public var serviceName: String {
+    return "echo.Echo"
+  }
 
   /// Immediately returns an echo of a request.
   ///
@@ -64,7 +69,8 @@ extension Echo_EchoClientProtocol {
     return self.makeUnaryCall(
       path: "/echo.Echo/Get",
       request: request,
-      callOptions: callOptions ?? self.defaultCallOptions
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeGetInterceptors() ?? []
     )
   }
 
@@ -84,6 +90,7 @@ extension Echo_EchoClientProtocol {
       path: "/echo.Echo/Expand",
       request: request,
       callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeExpandInterceptors() ?? [],
       handler: handler
     )
   }
@@ -101,7 +108,8 @@ extension Echo_EchoClientProtocol {
   ) -> ClientStreamingCall<Echo_EchoRequest, Echo_EchoResponse> {
     return self.makeClientStreamingCall(
       path: "/echo.Echo/Collect",
-      callOptions: callOptions ?? self.defaultCallOptions
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeCollectInterceptors() ?? []
     )
   }
 
@@ -121,29 +129,53 @@ extension Echo_EchoClientProtocol {
     return self.makeBidirectionalStreamingCall(
       path: "/echo.Echo/Update",
       callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeUpdateInterceptors() ?? [],
       handler: handler
     )
   }
 }
 
+public protocol Echo_EchoClientInterceptorFactoryProtocol {
+
+  /// - Returns: Interceptors to use when invoking 'get'.
+  func makeGetInterceptors() -> [ClientInterceptor<Echo_EchoRequest, Echo_EchoResponse>]
+
+  /// - Returns: Interceptors to use when invoking 'expand'.
+  func makeExpandInterceptors() -> [ClientInterceptor<Echo_EchoRequest, Echo_EchoResponse>]
+
+  /// - Returns: Interceptors to use when invoking 'collect'.
+  func makeCollectInterceptors() -> [ClientInterceptor<Echo_EchoRequest, Echo_EchoResponse>]
+
+  /// - Returns: Interceptors to use when invoking 'update'.
+  func makeUpdateInterceptors() -> [ClientInterceptor<Echo_EchoRequest, Echo_EchoResponse>]
+}
+
 public final class Echo_EchoClient: Echo_EchoClientProtocol {
   public let channel: GRPCChannel
   public var defaultCallOptions: CallOptions
+  public var interceptors: Echo_EchoClientInterceptorFactoryProtocol?
 
   /// Creates a client for the echo.Echo service.
   ///
   /// - Parameters:
   ///   - channel: `GRPCChannel` to the service host.
   ///   - defaultCallOptions: Options to use for each service call if the user doesn't provide them.
-  public init(channel: GRPCChannel, defaultCallOptions: CallOptions = CallOptions()) {
+  ///   - interceptors: A factory providing interceptors for each RPC.
+  public init(
+    channel: GRPCChannel,
+    defaultCallOptions: CallOptions = CallOptions(),
+    interceptors: Echo_EchoClientInterceptorFactoryProtocol? = nil
+  ) {
     self.channel = channel
     self.defaultCallOptions = defaultCallOptions
+    self.interceptors = interceptors
   }
 }
 
 public final class Echo_EchoTestClient: Echo_EchoClientProtocol {
   private let fakeChannel: FakeChannel
   public var defaultCallOptions: CallOptions
+  public var interceptors: Echo_EchoClientInterceptorFactoryProtocol?
 
   public var channel: GRPCChannel {
     return self.fakeChannel
@@ -151,10 +183,12 @@ public final class Echo_EchoTestClient: Echo_EchoClientProtocol {
 
   public init(
     fakeChannel: FakeChannel = FakeChannel(),
-    defaultCallOptions callOptions: CallOptions = CallOptions()
+    defaultCallOptions callOptions: CallOptions = CallOptions(),
+    interceptors: Echo_EchoClientInterceptorFactoryProtocol? = nil
   ) {
     self.fakeChannel = fakeChannel
     self.defaultCallOptions = callOptions
+    self.interceptors = interceptors
   }
 
   /// Make a unary response for the Get RPC. This must be called
@@ -258,12 +292,17 @@ public final class Echo_EchoTestClient: Echo_EchoClientProtocol {
 
 /// To build a server, implement a class that conforms to this protocol.
 public protocol Echo_EchoProvider: CallHandlerProvider {
+  var interceptors: Echo_EchoServerInterceptorFactoryProtocol? { get }
+
   /// Immediately returns an echo of a request.
   func get(request: Echo_EchoRequest, context: StatusOnlyCallContext) -> EventLoopFuture<Echo_EchoResponse>
+
   /// Splits a request into words and returns each word in a stream of messages.
   func expand(request: Echo_EchoRequest, context: StreamingResponseCallContext<Echo_EchoResponse>) -> EventLoopFuture<GRPCStatus>
+
   /// Collects a stream of messages and returns them concatenated when the caller closes.
   func collect(context: UnaryResponseCallContext<Echo_EchoResponse>) -> EventLoopFuture<(StreamEvent<Echo_EchoRequest>) -> Void>
+
   /// Streams back messages as they are received in an input stream.
   func update(context: StreamingResponseCallContext<Echo_EchoResponse>) -> EventLoopFuture<(StreamEvent<Echo_EchoRequest>) -> Void>
 }
@@ -273,34 +312,68 @@ extension Echo_EchoProvider {
 
   /// Determines, calls and returns the appropriate request handler, depending on the request's method.
   /// Returns nil for methods not handled by this service.
-  public func handleMethod(_ methodName: Substring, callHandlerContext: CallHandlerContext) -> GRPCCallHandler? {
-    switch methodName {
+  public func handle(
+    method name: Substring,
+    context: CallHandlerContext
+  ) -> GRPCServerHandlerProtocol? {
+    switch name {
     case "Get":
-      return CallHandlerFactory.makeUnary(callHandlerContext: callHandlerContext) { context in
-        return { request in
-          self.get(request: request, context: context)
-        }
-      }
+      return UnaryServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<Echo_EchoRequest>(),
+        responseSerializer: ProtobufSerializer<Echo_EchoResponse>(),
+        interceptors: self.interceptors?.makeGetInterceptors() ?? [],
+        userFunction: self.get(request:context:)
+      )
 
     case "Expand":
-      return CallHandlerFactory.makeServerStreaming(callHandlerContext: callHandlerContext) { context in
-        return { request in
-          self.expand(request: request, context: context)
-        }
-      }
+      return ServerStreamingServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<Echo_EchoRequest>(),
+        responseSerializer: ProtobufSerializer<Echo_EchoResponse>(),
+        interceptors: self.interceptors?.makeExpandInterceptors() ?? [],
+        userFunction: self.expand(request:context:)
+      )
 
     case "Collect":
-      return CallHandlerFactory.makeClientStreaming(callHandlerContext: callHandlerContext) { context in
-        return self.collect(context: context)
-      }
+      return ClientStreamingServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<Echo_EchoRequest>(),
+        responseSerializer: ProtobufSerializer<Echo_EchoResponse>(),
+        interceptors: self.interceptors?.makeCollectInterceptors() ?? [],
+        observerFactory: self.collect(context:)
+      )
 
     case "Update":
-      return CallHandlerFactory.makeBidirectionalStreaming(callHandlerContext: callHandlerContext) { context in
-        return self.update(context: context)
-      }
+      return BidirectionalStreamingServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<Echo_EchoRequest>(),
+        responseSerializer: ProtobufSerializer<Echo_EchoResponse>(),
+        interceptors: self.interceptors?.makeUpdateInterceptors() ?? [],
+        observerFactory: self.update(context:)
+      )
 
-    default: return nil
+    default:
+      return nil
     }
   }
 }
 
+public protocol Echo_EchoServerInterceptorFactoryProtocol {
+
+  /// - Returns: Interceptors to use when handling 'get'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeGetInterceptors() -> [ServerInterceptor<Echo_EchoRequest, Echo_EchoResponse>]
+
+  /// - Returns: Interceptors to use when handling 'expand'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeExpandInterceptors() -> [ServerInterceptor<Echo_EchoRequest, Echo_EchoResponse>]
+
+  /// - Returns: Interceptors to use when handling 'collect'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeCollectInterceptors() -> [ServerInterceptor<Echo_EchoRequest, Echo_EchoResponse>]
+
+  /// - Returns: Interceptors to use when handling 'update'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeUpdateInterceptors() -> [ServerInterceptor<Echo_EchoRequest, Echo_EchoResponse>]
+}

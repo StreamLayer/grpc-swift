@@ -28,11 +28,27 @@ extension EmbeddedChannel {
     responseType: Response.Type = Response.self
   ) -> EventLoopFuture<Void> {
     return self.pipeline.addHandlers([
-      _GRPCClientChannelHandler(callType: callType, logger: logger),
+      GRPCClientChannelHandler(callType: callType, logger: logger),
       GRPCClientCodecHandler(
         serializer: ProtobufSerializer<Request>(),
         deserializer: ProtobufDeserializer<Response>()
       ),
     ])
+  }
+
+  public func _configureForEmbeddedServerTest(
+    servicesByName serviceProviders: [Substring: CallHandlerProvider],
+    encoding: ServerMessageEncoding,
+    normalizeHeaders: Bool,
+    logger: Logger
+  ) -> EventLoopFuture<Void> {
+    let codec = HTTP2ToRawGRPCServerCodec(
+      servicesByName: serviceProviders,
+      encoding: encoding,
+      errorDelegate: nil,
+      normalizeHeaders: normalizeHeaders,
+      logger: logger
+    )
+    return self.pipeline.addHandler(codec)
   }
 }

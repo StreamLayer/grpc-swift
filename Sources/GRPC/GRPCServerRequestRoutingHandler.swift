@@ -15,15 +15,12 @@
  */
 import Logging
 import NIO
+import NIOHPACK
 import NIOHTTP1
+import NIOHTTP2
 import SwiftProtobuf
 
-/// Processes individual gRPC messages and stream-close events on an HTTP2 channel.
-public protocol GRPCCallHandler: ChannelHandler {
-  var _codec: ChannelHandler { get }
-}
-
-/// Provides `GRPCCallHandler` objects for the methods on a particular service name.
+/// Provides `GRPCServerHandlerProtocol` objects for the methods on a particular service name.
 ///
 /// Implemented by the generated code.
 public protocol CallHandlerProvider: AnyObject {
@@ -32,270 +29,74 @@ public protocol CallHandlerProvider: AnyObject {
   /// - Example: "io.grpc.Echo.EchoService"
   var serviceName: Substring { get }
 
-  /// Determines, calls and returns the appropriate request handler (`GRPCCallHandler`), depending on the request's
-  /// method. Returns nil for methods not handled by this service.
-  func handleMethod(_ methodName: Substring, callHandlerContext: CallHandlerContext)
-    -> GRPCCallHandler?
+  /// Returns a call handler for the method with the given name, if this service provider implements
+  /// the given method. Returns `nil` if the method is not handled by this provider.
+  /// - Parameters:
+  ///   - name: The name of the method to handle.
+  ///   - context: An opaque context providing components to construct the handler with.
+  func handle(method name: Substring, context: CallHandlerContext) -> GRPCServerHandlerProtocol?
 }
 
 // This is public because it will be passed into generated code, all members are `internal` because
 // the context will get passed from generated code back into gRPC library code and all members should
 // be considered an implementation detail to the user.
 public struct CallHandlerContext {
+  @usableFromInline
   internal var errorDelegate: ServerErrorDelegate?
+  @usableFromInline
   internal var logger: Logger
+  @usableFromInline
   internal var encoding: ServerMessageEncoding
+  @usableFromInline
+  internal var eventLoop: EventLoop
+  @usableFromInline
+  internal var path: String
+  @usableFromInline
+  internal var remoteAddress: SocketAddress?
+  @usableFromInline
+  internal var responseWriter: GRPCServerResponseWriter
+  @usableFromInline
+  internal var allocator: ByteBufferAllocator
 }
 
-/// Attempts to route a request to a user-provided call handler. Also validates that the request has
-/// a suitable 'content-type' for gRPC.
-///
-/// Once the request headers are available, asks the `CallHandlerProvider` corresponding to the request's service name
-/// for a `GRPCCallHandler` object. That object is then forwarded the individual gRPC messages.
-///
-/// After the pipeline has been configured with the `GRPCCallHandler`, this handler removes itself
-/// from the pipeline.
-public final class GRPCServerRequestRoutingHandler {
-  private let logger: Logger
-  private let servicesByName: [Substring: CallHandlerProvider]
-  private let encoding: ServerMessageEncoding
-  private weak var errorDelegate: ServerErrorDelegate?
+/// A call URI split into components.
+struct CallPath {
+  /// The name of the service to call.
+  var service: String.UTF8View.SubSequence
+  /// The name of the method to call.
+  var method: String.UTF8View.SubSequence
 
-  private enum State: Equatable {
-    case notConfigured
-    case configuring([InboundOut])
-  }
+  /// Character used to split the path into components.
+  private let pathSplitDelimiter = UInt8(ascii: "/")
 
-  private var state: State = .notConfigured
-
-  public init(
-    servicesByName: [Substring: CallHandlerProvider],
-    encoding: ServerMessageEncoding,
-    errorDelegate: ServerErrorDelegate?,
-    logger: Logger
-  ) {
-    self.servicesByName = servicesByName
-    self.encoding = encoding
-    self.errorDelegate = errorDelegate
-    self.logger = logger
-  }
-}
-
-extension GRPCServerRequestRoutingHandler: ChannelInboundHandler, RemovableChannelHandler {
-  public typealias InboundIn = HTTPServerRequestPart
-  public typealias InboundOut = HTTPServerRequestPart
-  public typealias OutboundOut = HTTPServerResponsePart
-
-  public func errorCaught(context: ChannelHandlerContext, error: Error) {
-    let status: GRPCStatus
-    if let errorWithContext = error as? GRPCError.WithContext {
-      self.errorDelegate?.observeLibraryError(errorWithContext.error)
-      status = errorWithContext.error.makeGRPCStatus()
-    } else {
-      self.errorDelegate?.observeLibraryError(error)
-      status = (error as? GRPCStatusTransformable)?.makeGRPCStatus() ?? .processingError
-    }
-
-    switch self.state {
-    case .notConfigured:
-      // We don't know what protocol we're speaking at this point. We'll just have to close the
-      // channel.
-      ()
-
-    case let .configuring(messages):
-      // first! is fine here: we only go from `.notConfigured` to `.configuring` when we receive
-      // and validate the request head.
-      let head = messages.compactMap { part -> HTTPRequestHead? in
-        switch part {
-        case let .head(head):
-          return head
-        default:
-          return nil
-        }
-      }.first!
-
-      let responseHead = self.makeResponseHead(requestHead: head, status: status)
-      context.write(self.wrapOutboundOut(.head(responseHead)), promise: nil)
-      context.write(self.wrapOutboundOut(.end(nil)), promise: nil)
-      context.flush()
-    }
-
-    context.close(mode: .all, promise: nil)
-  }
-
-  public func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-    let requestPart = self.unwrapInboundIn(data)
-    switch requestPart {
-    case let .head(requestHead):
-      precondition(self.state == .notConfigured)
-
-      // Validate the 'content-type' is related to gRPC before proceeding.
-      let maybeContentType = requestHead.headers.first(name: GRPCHeaderName.contentType)
-      guard let contentType = maybeContentType,
-        contentType.starts(with: ContentType.commonPrefix) else {
-        self.logger.warning(
-          "received request whose 'content-type' does not exist or start with '\(ContentType.commonPrefix)'",
-          metadata: ["content-type": "\(String(describing: maybeContentType))"]
-        )
-
-        // From: https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md
-        //
-        //   If 'content-type' does not begin with "application/grpc", gRPC servers SHOULD respond
-        //   with HTTP status of 415 (Unsupported Media Type). This will prevent other HTTP/2
-        //   clients from interpreting a gRPC error response, which uses status 200 (OK), as
-        //   successful.
-        let responseHead = HTTPResponseHead(
-          version: requestHead.version,
-          status: .unsupportedMediaType
-        )
-
-        // Fail the call. Note: we're not speaking gRPC here, so no status or message.
-        context.write(self.wrapOutboundOut(.head(responseHead)), promise: nil)
-        context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
-        return
-      }
-
-      // Do we know how to handle this RPC?
-      guard let callHandler = self.makeCallHandler(
-        channel: context.channel,
-        requestHead: requestHead
-      ) else {
-        self.logger.warning(
-          "unable to make call handler; the RPC is not implemented on this server",
-          metadata: ["uri": "\(requestHead.uri)"]
-        )
-
-        let status = GRPCError.RPCNotImplemented(rpc: requestHead.uri).makeGRPCStatus()
-        let responseHead = self.makeResponseHead(requestHead: requestHead, status: status)
-
-        // Write back a 'trailers-only' response.
-        context.write(self.wrapOutboundOut(.head(responseHead)), promise: nil)
-        context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
-        return
-      }
-
-      self.logger.debug("received request head, configuring pipeline")
-
-      // Buffer the request head; we'll replay it in the next handler when we're removed from the
-      // pipeline.
-      self.state = .configuring([requestPart])
-
-      // Configure the rest of the pipeline to serve the RPC.
-      let httpToGRPC = HTTP1ToGRPCServerCodec(encoding: self.encoding, logger: self.logger)
-      let codec = callHandler._codec
-      context.pipeline.addHandlers([httpToGRPC, codec, callHandler], position: .after(self))
-        .whenSuccess {
-          context.pipeline.removeHandler(self, promise: nil)
-        }
-
-    case .body, .end:
-      switch self.state {
-      case .notConfigured:
-        // We can reach this point if we're receiving messages for a method that isn't implemented,
-        // in which case we just drop the messages; our response should already be in-flight.
-        ()
-
-      case var .configuring(buffer):
-        // We received a message while the pipeline was being configured; hold on to it while we
-        // finish configuring the pipeline.
-        buffer.append(requestPart)
-        self.state = .configuring(buffer)
-      }
-    }
-  }
-
-  public func handlerRemoved(context: ChannelHandlerContext) {
-    switch self.state {
-    case .notConfigured:
-      ()
-
-    case let .configuring(messages):
-      for message in messages {
-        context.fireChannelRead(self.wrapInboundOut(message))
-      }
-    }
-  }
-
-  /// A call URI split into components.
-  struct CallPath {
-    /// The name of the service to call.
-    var service: String.UTF8View.SubSequence
-    /// The name of the method to call.
-    var method: String.UTF8View.SubSequence
-
-    /// Charater used to split the path into components.
-    private let pathSplitDelimiter = UInt8(ascii: "/")
-
-    /// Split a path into service and method.
-    /// Split is done in UTF8 as this turns out to be approximately 10x faster than a simple split.
-    /// URI format: "/package.Servicename/MethodName"
-    init?(requestURI: String) {
-      var utf8View = requestURI.utf8[...]
-      // Check and remove the split character at the beginning.
-      guard let prefix = utf8View.trimPrefix(to: self.pathSplitDelimiter), prefix.isEmpty else {
-        return nil
-      }
-      guard let service = utf8View.trimPrefix(to: pathSplitDelimiter) else {
-        return nil
-      }
-      guard let method = utf8View.trimPrefix(to: pathSplitDelimiter) else {
-        return nil
-      }
-
-      self.service = service
-      self.method = method
-    }
-  }
-
-  private func makeCallHandler(channel: Channel, requestHead: HTTPRequestHead) -> GRPCCallHandler? {
-    // URI format: "/package.Servicename/MethodName", resulting in the following components separated by a slash:
-    // - uriComponents[0]: empty
-    // - uriComponents[1]: service name (including the package name);
-    //     `CallHandlerProvider`s should provide the service name including the package name.
-    // - uriComponents[2]: method name.
-    self.logger.debug("making call handler", metadata: ["path": "\(requestHead.uri)"])
-    let uriComponents = CallPath(requestURI: requestHead.uri)
-
-    let context = CallHandlerContext(
-      errorDelegate: self.errorDelegate,
-      logger: self.logger,
-      encoding: self.encoding
-    )
-
-    guard let callPath = uriComponents,
-      let providerForServiceName = servicesByName[String.SubSequence(callPath.service)],
-      let callHandler = providerForServiceName.handleMethod(
-        String.SubSequence(callPath.method),
-        callHandlerContext: context
-      ) else {
-      self.logger.notice("could not create handler", metadata: ["path": "\(requestHead.uri)"])
+  /// Split a path into service and method.
+  /// Split is done in UTF8 as this turns out to be approximately 10x faster than a simple split.
+  /// URI format: "/package.Servicename/MethodName"
+  init?(requestURI: String) {
+    var utf8View = requestURI.utf8[...]
+    // Check and remove the split character at the beginning.
+    guard let prefix = utf8View.trimPrefix(to: self.pathSplitDelimiter), prefix.isEmpty else {
       return nil
     }
-    return callHandler
-  }
-
-  private func makeResponseHead(requestHead: HTTPRequestHead,
-                                status: GRPCStatus) -> HTTPResponseHead {
-    var headers: HTTPHeaders = [
-      GRPCHeaderName.contentType: ContentType.protobuf.canonicalValue,
-      GRPCHeaderName.statusCode: "\(status.code.rawValue)",
-    ]
-
-    if let message = status.message.flatMap(GRPCStatusMessageMarshaller.marshall) {
-      headers.add(name: GRPCHeaderName.statusMessage, value: message)
+    guard let service = utf8View.trimPrefix(to: pathSplitDelimiter) else {
+      return nil
+    }
+    guard let method = utf8View.trimPrefix(to: pathSplitDelimiter) else {
+      return nil
     }
 
-    return HTTPResponseHead(version: requestHead.version, status: .ok, headers: headers)
+    self.service = service
+    self.method = method
   }
 }
 
 extension Collection where Self == Self.SubSequence, Self.Element: Equatable {
   /// Trims out the prefix up to `separator`, and returns it.
   /// Sets self to the subsequence after the separator, and returns the subsequence before the separator.
-  /// If self is emtpy returns `nil`
+  /// If self is empty returns `nil`
   /// - parameters:
   ///     - separator : The Element between the head which is returned and the rest which is left in self.
-  /// - returns: SubSequence containing everything between the beginnning and the first occurance of
+  /// - returns: SubSequence containing everything between the beginning and the first occurrence of
   /// `separator`.  If `separator` is not found this will be the entire Collection. If the collection is empty
   /// returns `nil`
   mutating func trimPrefix(to separator: Element) -> SubSequence? {

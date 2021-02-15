@@ -3,7 +3,7 @@ SWIFT:=swift
 # Where products will be built; this is the SPM default.
 SWIFT_BUILD_PATH:=./.build
 SWIFT_BUILD_CONFIGURATION=debug
-SWIFT_FLAGS=--build-path=${SWIFT_BUILD_PATH} --configuration=${SWIFT_BUILD_CONFIGURATION}
+SWIFT_FLAGS=--build-path=${SWIFT_BUILD_PATH} --configuration=${SWIFT_BUILD_CONFIGURATION} --enable-test-discovery
 # Force release configuration (for plugins)
 SWIFT_FLAGS_RELEASE=$(patsubst --configuration=%,--configuration=release,$(SWIFT_FLAGS))
 
@@ -49,7 +49,7 @@ interop-test-runner:
 interop-backoff-test-runner:
 	${SWIFT_BUILD} --product GRPCConnectionBackoffInteropTest
 
-### Xcodeproj and LinuxMain
+### Xcodeproj
 
 .PHONY:
 project: ${XCODEPROJ}
@@ -58,10 +58,6 @@ ${XCODEPROJ}:
 	${SWIFT_PACKAGE} generate-xcodeproj --output $@
 	@-ruby scripts/fix-project-settings.rb GRPC.xcodeproj || \
 		echo "Consider running 'sudo gem install xcodeproj' to automatically set correct indentation settings for the generated project."
-
-# Generates LinuxMain.swift, only on macOS.
-generate-linuxmain:
-	${SWIFT_TEST} --generate-linuxmain
 
 ### Protobuf Generation ########################################################
 
@@ -111,6 +107,22 @@ ROUTE_GUIDE_GRPC=$(ROUTE_GUIDE_PROTO:.proto=.grpc.swift)
 .PHONY:
 generate-route-guide: ${ROUTE_GUIDE_PB} ${ROUTE_GUIDE_GRPC}
 
+NORMALIZATION_PROTO=Tests/GRPCTests/Codegen/Normalization/normalization.proto
+NORMALIZATION_PB=$(NORMALIZATION_PROTO:.proto=.pb.swift)
+NORMALIZATION_GRPC=$(NORMALIZATION_PROTO:.proto=.grpc.swift)
+
+# For normalization we'll explicitly keep the method casing.
+${NORMALIZATION_GRPC}: ${NORMALIZATION_PROTO} ${PROTOC_GEN_GRPC_SWIFT}
+	protoc $< \
+		--proto_path=$(dir $<) \
+		--plugin=${PROTOC_GEN_GRPC_SWIFT} \
+		--grpc-swift_opt=KeepMethodCasing=true \
+		--grpc-swift_out=$(dir $<)
+
+# Generates protobufs and gRPC client and server for the Route Guide example
+.PHONY:
+generate-normalization: ${NORMALIZATION_PB} ${NORMALIZATION_GRPC}
+
 ### Testing ####################################################################
 
 # Normal test suite.
@@ -122,12 +134,6 @@ test:
 .PHONY:
 test-tsan:
 	${SWIFT_TEST} --sanitize=thread
-
-# Checks that linuxmain has been updated: requires macOS.
-.PHONY:
-test-generate-linuxmain: generate-linuxmain
-	@git diff --exit-code Tests/LinuxMain.swift Tests/*/XCTestManifests.swift > /dev/null || \
-		{ echo "Generated tests are out-of-date; run 'swift test --generate-linuxmain' to update them!"; exit 1; }
 
 # Runs codegen tests.
 .PHONY:

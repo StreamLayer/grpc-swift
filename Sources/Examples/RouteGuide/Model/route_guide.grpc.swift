@@ -25,8 +25,13 @@ import NIO
 import SwiftProtobuf
 
 
-/// Usage: instantiate Routeguide_RouteGuideClient, then call methods of this protocol to make API calls.
+/// Interface exported by the server.
+///
+/// Usage: instantiate `Routeguide_RouteGuideClient`, then call methods of this protocol to make API calls.
 public protocol Routeguide_RouteGuideClientProtocol: GRPCClient {
+  var serviceName: String { get }
+  var interceptors: Routeguide_RouteGuideClientInterceptorFactoryProtocol? { get }
+
   func getFeature(
     _ request: Routeguide_Point,
     callOptions: CallOptions?
@@ -46,10 +51,12 @@ public protocol Routeguide_RouteGuideClientProtocol: GRPCClient {
     callOptions: CallOptions?,
     handler: @escaping (Routeguide_RouteNote) -> Void
   ) -> BidirectionalStreamingCall<Routeguide_RouteNote, Routeguide_RouteNote>
-
 }
 
 extension Routeguide_RouteGuideClientProtocol {
+  public var serviceName: String {
+    return "routeguide.RouteGuide"
+  }
 
   /// A simple RPC.
   ///
@@ -69,7 +76,8 @@ extension Routeguide_RouteGuideClientProtocol {
     return self.makeUnaryCall(
       path: "/routeguide.RouteGuide/GetFeature",
       request: request,
-      callOptions: callOptions ?? self.defaultCallOptions
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeGetFeatureInterceptors() ?? []
     )
   }
 
@@ -94,6 +102,7 @@ extension Routeguide_RouteGuideClientProtocol {
       path: "/routeguide.RouteGuide/ListFeatures",
       request: request,
       callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeListFeaturesInterceptors() ?? [],
       handler: handler
     )
   }
@@ -114,7 +123,8 @@ extension Routeguide_RouteGuideClientProtocol {
   ) -> ClientStreamingCall<Routeguide_Point, Routeguide_RouteSummary> {
     return self.makeClientStreamingCall(
       path: "/routeguide.RouteGuide/RecordRoute",
-      callOptions: callOptions ?? self.defaultCallOptions
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeRecordRouteInterceptors() ?? []
     )
   }
 
@@ -137,28 +147,55 @@ extension Routeguide_RouteGuideClientProtocol {
     return self.makeBidirectionalStreamingCall(
       path: "/routeguide.RouteGuide/RouteChat",
       callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeRouteChatInterceptors() ?? [],
       handler: handler
     )
   }
 }
 
+public protocol Routeguide_RouteGuideClientInterceptorFactoryProtocol {
+
+  /// - Returns: Interceptors to use when invoking 'getFeature'.
+  func makeGetFeatureInterceptors() -> [ClientInterceptor<Routeguide_Point, Routeguide_Feature>]
+
+  /// - Returns: Interceptors to use when invoking 'listFeatures'.
+  func makeListFeaturesInterceptors() -> [ClientInterceptor<Routeguide_Rectangle, Routeguide_Feature>]
+
+  /// - Returns: Interceptors to use when invoking 'recordRoute'.
+  func makeRecordRouteInterceptors() -> [ClientInterceptor<Routeguide_Point, Routeguide_RouteSummary>]
+
+  /// - Returns: Interceptors to use when invoking 'routeChat'.
+  func makeRouteChatInterceptors() -> [ClientInterceptor<Routeguide_RouteNote, Routeguide_RouteNote>]
+}
+
 public final class Routeguide_RouteGuideClient: Routeguide_RouteGuideClientProtocol {
   public let channel: GRPCChannel
   public var defaultCallOptions: CallOptions
+  public var interceptors: Routeguide_RouteGuideClientInterceptorFactoryProtocol?
 
   /// Creates a client for the routeguide.RouteGuide service.
   ///
   /// - Parameters:
   ///   - channel: `GRPCChannel` to the service host.
   ///   - defaultCallOptions: Options to use for each service call if the user doesn't provide them.
-  public init(channel: GRPCChannel, defaultCallOptions: CallOptions = CallOptions()) {
+  ///   - interceptors: A factory providing interceptors for each RPC.
+  public init(
+    channel: GRPCChannel,
+    defaultCallOptions: CallOptions = CallOptions(),
+    interceptors: Routeguide_RouteGuideClientInterceptorFactoryProtocol? = nil
+  ) {
     self.channel = channel
     self.defaultCallOptions = defaultCallOptions
+    self.interceptors = interceptors
   }
 }
 
+/// Interface exported by the server.
+///
 /// To build a server, implement a class that conforms to this protocol.
 public protocol Routeguide_RouteGuideProvider: CallHandlerProvider {
+  var interceptors: Routeguide_RouteGuideServerInterceptorFactoryProtocol? { get }
+
   /// A simple RPC.
   ///
   /// Obtains the feature at a given position.
@@ -166,6 +203,7 @@ public protocol Routeguide_RouteGuideProvider: CallHandlerProvider {
   /// A feature with an empty name is returned if there's no feature at the given
   /// position.
   func getFeature(request: Routeguide_Point, context: StatusOnlyCallContext) -> EventLoopFuture<Routeguide_Feature>
+
   /// A server-to-client streaming RPC.
   ///
   /// Obtains the Features available within the given Rectangle.  Results are
@@ -173,11 +211,13 @@ public protocol Routeguide_RouteGuideProvider: CallHandlerProvider {
   /// repeated field), as the rectangle may cover a large area and contain a
   /// huge number of features.
   func listFeatures(request: Routeguide_Rectangle, context: StreamingResponseCallContext<Routeguide_Feature>) -> EventLoopFuture<GRPCStatus>
+
   /// A client-to-server streaming RPC.
   ///
   /// Accepts a stream of Points on a route being traversed, returning a
   /// RouteSummary when traversal is completed.
   func recordRoute(context: UnaryResponseCallContext<Routeguide_RouteSummary>) -> EventLoopFuture<(StreamEvent<Routeguide_Point>) -> Void>
+
   /// A Bidirectional streaming RPC.
   ///
   /// Accepts a stream of RouteNotes sent while a route is being traversed,
@@ -190,34 +230,68 @@ extension Routeguide_RouteGuideProvider {
 
   /// Determines, calls and returns the appropriate request handler, depending on the request's method.
   /// Returns nil for methods not handled by this service.
-  public func handleMethod(_ methodName: Substring, callHandlerContext: CallHandlerContext) -> GRPCCallHandler? {
-    switch methodName {
+  public func handle(
+    method name: Substring,
+    context: CallHandlerContext
+  ) -> GRPCServerHandlerProtocol? {
+    switch name {
     case "GetFeature":
-      return CallHandlerFactory.makeUnary(callHandlerContext: callHandlerContext) { context in
-        return { request in
-          self.getFeature(request: request, context: context)
-        }
-      }
+      return UnaryServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<Routeguide_Point>(),
+        responseSerializer: ProtobufSerializer<Routeguide_Feature>(),
+        interceptors: self.interceptors?.makeGetFeatureInterceptors() ?? [],
+        userFunction: self.getFeature(request:context:)
+      )
 
     case "ListFeatures":
-      return CallHandlerFactory.makeServerStreaming(callHandlerContext: callHandlerContext) { context in
-        return { request in
-          self.listFeatures(request: request, context: context)
-        }
-      }
+      return ServerStreamingServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<Routeguide_Rectangle>(),
+        responseSerializer: ProtobufSerializer<Routeguide_Feature>(),
+        interceptors: self.interceptors?.makeListFeaturesInterceptors() ?? [],
+        userFunction: self.listFeatures(request:context:)
+      )
 
     case "RecordRoute":
-      return CallHandlerFactory.makeClientStreaming(callHandlerContext: callHandlerContext) { context in
-        return self.recordRoute(context: context)
-      }
+      return ClientStreamingServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<Routeguide_Point>(),
+        responseSerializer: ProtobufSerializer<Routeguide_RouteSummary>(),
+        interceptors: self.interceptors?.makeRecordRouteInterceptors() ?? [],
+        observerFactory: self.recordRoute(context:)
+      )
 
     case "RouteChat":
-      return CallHandlerFactory.makeBidirectionalStreaming(callHandlerContext: callHandlerContext) { context in
-        return self.routeChat(context: context)
-      }
+      return BidirectionalStreamingServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<Routeguide_RouteNote>(),
+        responseSerializer: ProtobufSerializer<Routeguide_RouteNote>(),
+        interceptors: self.interceptors?.makeRouteChatInterceptors() ?? [],
+        observerFactory: self.routeChat(context:)
+      )
 
-    default: return nil
+    default:
+      return nil
     }
   }
 }
 
+public protocol Routeguide_RouteGuideServerInterceptorFactoryProtocol {
+
+  /// - Returns: Interceptors to use when handling 'getFeature'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeGetFeatureInterceptors() -> [ServerInterceptor<Routeguide_Point, Routeguide_Feature>]
+
+  /// - Returns: Interceptors to use when handling 'listFeatures'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeListFeaturesInterceptors() -> [ServerInterceptor<Routeguide_Rectangle, Routeguide_Feature>]
+
+  /// - Returns: Interceptors to use when handling 'recordRoute'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeRecordRouteInterceptors() -> [ServerInterceptor<Routeguide_Point, Routeguide_RouteSummary>]
+
+  /// - Returns: Interceptors to use when handling 'routeChat'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeRouteChatInterceptors() -> [ServerInterceptor<Routeguide_RouteNote, Routeguide_RouteNote>]
+}

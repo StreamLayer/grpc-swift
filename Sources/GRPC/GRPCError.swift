@@ -236,12 +236,25 @@ public enum GRPCError {
     }
   }
 
+  /// Action was taken after the RPC had already completed.
+  public struct AlreadyComplete: GRPCErrorProtocol {
+    public var description: String {
+      return "The RPC has already completed"
+    }
+
+    public init() {}
+
+    public func makeGRPCStatus() -> GRPCStatus {
+      return GRPCStatus(code: .unavailable, message: self.description)
+    }
+  }
+
   /// An invalid state has been reached; something has gone very wrong.
   public struct InvalidState: GRPCErrorProtocol {
     public var message: String
 
     public init(_ message: String) {
-      self.message = message
+      self.message = "Invalid state: \(message)"
     }
 
     public var description: String {
@@ -249,13 +262,29 @@ public enum GRPCError {
     }
 
     public func makeGRPCStatus() -> GRPCStatus {
-      return GRPCStatus(code: .internalError, message: "Invalid state: \(self.message)")
+      return GRPCStatus(code: .internalError, message: self.message)
+    }
+  }
+
+  public struct ProtocolViolation: GRPCErrorProtocol {
+    public var message: String
+
+    public init(_ message: String) {
+      self.message = "Protocol violation: \(message)"
+    }
+
+    public var description: String {
+      return self.message
+    }
+
+    public func makeGRPCStatus() -> GRPCStatus {
+      return GRPCStatus(code: .internalError, message: self.message)
     }
   }
 }
 
 extension GRPCError {
-  struct WithContext: Error {
+  struct WithContext: Error, GRPCStatusTransformable {
     var error: GRPCStatusTransformable
     var file: StaticString
     var line: Int
@@ -271,6 +300,10 @@ extension GRPCError {
       self.file = file
       self.line = line
       self.function = function
+    }
+
+    func makeGRPCStatus() -> GRPCStatus {
+      return self.error.makeGRPCStatus()
     }
   }
 }

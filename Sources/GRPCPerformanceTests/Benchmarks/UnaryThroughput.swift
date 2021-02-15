@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import EchoImplementation
 import EchoModel
 import Foundation
 import GRPC
@@ -33,7 +32,7 @@ class Unary: ServerProvidingBenchmark {
   init(requests: Int, text: String) {
     self.requestCount = requests
     self.requestText = text
-    super.init(providers: [EchoProvider()])
+    super.init(providers: [MinimalEchoProvider()])
   }
 
   override func setUp() throws {
@@ -54,7 +53,6 @@ class Unary: ServerProvidingBenchmark {
       let requests = (lowerBound ..< upperBound).map { _ in
         client.get(Echo_EchoRequest.with { $0.text = self.requestText }).response
       }
-
       try EventLoopFuture.andAllSucceed(requests, on: self.group.next()).wait()
     }
   }

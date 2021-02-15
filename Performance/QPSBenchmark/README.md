@@ -56,7 +56,7 @@ For examples of running benchmarking tests proceed as follows.
 4. Invoke the driver with a scenario file, for example:
 
    ```sh
-   /path/to/qps_json_driver --scenario_file=/path/to/scenario.json
+   /path/to/qps_json_driver --scenarios_file=/path/to/scenario.json
    ```
 
 ### Scenarios
@@ -64,6 +64,6 @@ For examples of running benchmarking tests proceed as follows.
 - `scenarios/unary-unconstrained.json`: will run a test with unary RPCs
   using all cores on the machine. 64 clients will connect to the server, each
   enqueuing up to 100 requests.
-- `scenarios/bidirectional-ping-pong.json`: will run bidirectional streaming
-  RPCs.
-
+- `scenarios/unary-1-connection.json`: as above with a single client.
+- `scenarios/bidirectional-ping-pong-1-connection.json`: will run bidirectional
+  streaming RPCs using a single client.

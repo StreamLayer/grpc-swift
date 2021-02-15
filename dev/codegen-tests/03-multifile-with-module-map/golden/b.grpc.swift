@@ -24,16 +24,21 @@ import GRPC
 import NIO
 
 
-/// Usage: instantiate B_ServiceBClient, then call methods of this protocol to make API calls.
+/// Usage: instantiate `B_ServiceBClient`, then call methods of this protocol to make API calls.
 internal protocol B_ServiceBClientProtocol: GRPCClient {
+  var serviceName: String { get }
+  var interceptors: B_ServiceBClientInterceptorFactoryProtocol? { get }
+
   func callServiceB(
     _ request: B_MessageB,
     callOptions: CallOptions?
   ) -> UnaryCall<B_MessageB, SwiftProtobuf.Google_Protobuf_Empty>
-
 }
 
 extension B_ServiceBClientProtocol {
+  internal var serviceName: String {
+    return "b.ServiceB"
+  }
 
   /// Unary call to CallServiceB
   ///
@@ -48,28 +53,44 @@ extension B_ServiceBClientProtocol {
     return self.makeUnaryCall(
       path: "/b.ServiceB/CallServiceB",
       request: request,
-      callOptions: callOptions ?? self.defaultCallOptions
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeCallServiceBInterceptors() ?? []
     )
   }
+}
+
+internal protocol B_ServiceBClientInterceptorFactoryProtocol {
+
+  /// - Returns: Interceptors to use when invoking 'callServiceB'.
+  func makeCallServiceBInterceptors() -> [ClientInterceptor<B_MessageB, SwiftProtobuf.Google_Protobuf_Empty>]
 }
 
 internal final class B_ServiceBClient: B_ServiceBClientProtocol {
   internal let channel: GRPCChannel
   internal var defaultCallOptions: CallOptions
+  internal var interceptors: B_ServiceBClientInterceptorFactoryProtocol?
 
   /// Creates a client for the b.ServiceB service.
   ///
   /// - Parameters:
   ///   - channel: `GRPCChannel` to the service host.
   ///   - defaultCallOptions: Options to use for each service call if the user doesn't provide them.
-  internal init(channel: GRPCChannel, defaultCallOptions: CallOptions = CallOptions()) {
+  ///   - interceptors: A factory providing interceptors for each RPC.
+  internal init(
+    channel: GRPCChannel,
+    defaultCallOptions: CallOptions = CallOptions(),
+    interceptors: B_ServiceBClientInterceptorFactoryProtocol? = nil
+  ) {
     self.channel = channel
     self.defaultCallOptions = defaultCallOptions
+    self.interceptors = interceptors
   }
 }
 
 /// To build a server, implement a class that conforms to this protocol.
 internal protocol B_ServiceBProvider: CallHandlerProvider {
+  var interceptors: B_ServiceBServerInterceptorFactoryProtocol? { get }
+
   func callServiceB(request: B_MessageB, context: StatusOnlyCallContext) -> EventLoopFuture<SwiftProtobuf.Google_Protobuf_Empty>
 }
 
@@ -78,17 +99,29 @@ extension B_ServiceBProvider {
 
   /// Determines, calls and returns the appropriate request handler, depending on the request's method.
   /// Returns nil for methods not handled by this service.
-  internal func handleMethod(_ methodName: Substring, callHandlerContext: CallHandlerContext) -> GRPCCallHandler? {
-    switch methodName {
+  internal func handle(
+    method name: Substring,
+    context: CallHandlerContext
+  ) -> GRPCServerHandlerProtocol? {
+    switch name {
     case "CallServiceB":
-      return CallHandlerFactory.makeUnary(callHandlerContext: callHandlerContext) { context in
-        return { request in
-          self.callServiceB(request: request, context: context)
-        }
-      }
+      return UnaryServerHandler(
+        context: context,
+        requestDeserializer: ProtobufDeserializer<B_MessageB>(),
+        responseSerializer: ProtobufSerializer<SwiftProtobuf.Google_Protobuf_Empty>(),
+        interceptors: self.interceptors?.makeCallServiceBInterceptors() ?? [],
+        userFunction: self.callServiceB(request:context:)
+      )
 
-    default: return nil
+    default:
+      return nil
     }
   }
 }
 
+internal protocol B_ServiceBServerInterceptorFactoryProtocol {
+
+  /// - Returns: Interceptors to use when handling 'callServiceB'.
+  ///   Defaults to calling `self.makeInterceptors()`.
+  func makeCallServiceBInterceptors() -> [ServerInterceptor<B_MessageB, SwiftProtobuf.Google_Protobuf_Empty>]
+}
