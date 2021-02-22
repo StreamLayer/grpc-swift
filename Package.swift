@@ -1,4 +1,4 @@
-// swift-tools-version:5.2
+// swift-tools-version:5.3
 /*
  * Copyright 2017, gRPC Authors All rights reserved.
  *
@@ -8,7 +8,7 @@
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
+ * Unless required by applicable la w or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
@@ -76,7 +76,8 @@ let package = Package(
         .target(name: "GRPCSampleData"),
         .target(name: "GRPCInteroperabilityTestsImplementation"),
         .target(name: "HelloWorldModel"),
-      ]
+      ],
+      exclude: ["Codegen/Normalization/normalization.proto"]
     ),
 
     .target(
@@ -92,7 +93,8 @@ let package = Package(
       dependencies: [
         .product(name: "SwiftProtobuf", package: "SwiftProtobuf"),
         .product(name: "SwiftProtobufPluginLibrary", package: "SwiftProtobuf"),
-      ]
+      ],
+      exclude: ["README.md"]
     ),
 
     // Interoperability tests implementation.
@@ -112,6 +114,15 @@ let package = Package(
         .product(name: "NIO", package: "swift-nio"),
         .product(name: "NIOHTTP1", package: "swift-nio"),
         .product(name: "SwiftProtobuf", package: "SwiftProtobuf"),
+      ],
+      exclude: [
+        "generate.sh",
+        "unimplemented_call.patch",
+        "src/proto/grpc/testing/messages.proto",
+        "README.md",
+        "src/proto/grpc/testing/empty_service.proto",
+        "src/proto/grpc/testing/test.proto",
+        "src/proto/grpc/testing/empty.proto"
       ]
     ),
 
@@ -132,7 +143,8 @@ let package = Package(
         .target(name: "GRPCInteroperabilityTestModels"),
         .product(name: "Logging", package: "swift-log"),
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
-      ]
+      ],
+      exclude: ["README.md"]
     ),
 
     // Performance tests implementation and CLI.
@@ -187,7 +199,8 @@ let package = Package(
         .product(name: "NIO", package: "swift-nio"),
         .product(name: "SwiftProtobuf", package: "SwiftProtobuf"),
       ],
-      path: "Sources/Examples/Echo/Model"
+      path: "Sources/Examples/Echo/Model",
+      exclude: ["echo.proto"]
     ),
 
     // Model for the HelloWorld example
@@ -198,7 +211,8 @@ let package = Package(
         .product(name: "NIO", package: "swift-nio"),
         .product(name: "SwiftProtobuf", package: "SwiftProtobuf"),
       ],
-      path: "Sources/Examples/HelloWorld/Model"
+      path: "Sources/Examples/HelloWorld/Model",
+      exclude: ["helloworld.proto"]
     ),
 
     // Client for the HelloWorld example
@@ -232,7 +246,8 @@ let package = Package(
         .product(name: "NIO", package: "swift-nio"),
         .product(name: "SwiftProtobuf", package: "SwiftProtobuf"),
       ],
-      path: "Sources/Examples/RouteGuide/Model"
+      path: "Sources/Examples/RouteGuide/Model",
+      exclude: ["route_guide.proto"]
     ),
 
     // Client for the RouteGuide example
@@ -268,7 +283,8 @@ let package = Package(
         .product(name: "NIOExtras", package: "swift-nio-extras"),
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
       ],
-      path: "Sources/Examples/PacketCapture"
+      path: "Sources/Examples/PacketCapture",
+      exclude: ["README.md"]
     ),
   ]
 )
