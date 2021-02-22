@@ -11,7 +11,6 @@ carthage_targets = [
     "CNIODarwin",
     "CNIOHTTPParser",
     "CNIOLinux",
-    "CNIOSHA1",
     "CNIOWindows",
     # "Echo",
     # "EchoImplementation",
@@ -30,6 +29,7 @@ carthage_targets = [
     "Logging",
     "NIO",
     "NIOConcurrencyHelpers",
+    "NIOExtras",
     "NIOFoundationCompat",
     "NIOHPACK",
     "NIOHTTP1",
@@ -61,11 +61,11 @@ pm_targets = [
     "CNIODarwin",
     "CNIOHTTPParser",
     "CNIOLinux",
-    "CNIOSHA1",
     "CNIOWindows",
     "Logging",
     "NIO",
     "NIOConcurrencyHelpers",
+    "NIOExtras",
     "NIOFoundationCompat",
     "NIOHPACK",
     "NIOHTTP1",
@@ -80,6 +80,19 @@ pm_targets = [
 targets_to_remove = project.targets.select { |target| !carthage_targets.include?(target.name) }
 targets_to_remove.each do |target|
   target.remove_from_project
+end
+
+save_schemas = [
+  'protoc-gen-grpc-swift',
+  'grpc-swift-Package'
+]
+
+schemes = Xcodeproj::Project.schemes(project_path)
+schemes.each do |scheme|
+  if !save_schemas.include?(scheme.to_s) then
+    schemePath = Xcodeproj::XCScheme.shared_data_dir(project_path) + "#{scheme.to_s}.xcscheme"
+    File.delete(schemePath)
+  end
 end
 
 # 2) Prevent linking of nghttp2 library
@@ -108,7 +121,7 @@ def addSubTarget(project, scheme, name)
   newBuildAction.build_for_archiving = true
   newBuildAction.build_for_profiling = true
   newBuildAction.build_for_running = true
-  newBuildAction.build_for_testing = true
+  newBuildAction.build_for_testing = false
   scheme.build_action.add_entry(newBuildAction)
 end
 
@@ -119,8 +132,9 @@ entries_to_keep = scheme.build_action.entries.select { |x|
 }
 
 scheme.build_action.entries = entries_to_keep
+scheme.test_action.testables = []
 
-# 4) Add a "Pre-Actions" script to the "BuildAction" of SwiftGRPC-Package.xcscheme.
+# 4) Add a "Pre-Actions" script to the "BuildAction"   of SwiftGRPC-Package.xcscheme.
 # The Pre-Actions script will resolve the SPM dependencies and fix the corresponding paths in SwiftGRPC-Carthage.xcodeproj before the BuildAction
 buildActions = scheme.build_action.xml_element
 

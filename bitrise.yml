@@ -139,12 +139,12 @@ workflows:
             release=`node -e "process.stdout.write(require('./package.json').version)"`
             envman add --key RELEASE_VERSION --value ${release}
 
-    - build-router-start:
-        inputs:
-        - workflows: xcode_113
-        - wait_for_builds: 'false'
-        - access_token: "$BITRISE_ACCESS_TOKEN"
-        - environment_key_list: "RELEASE_VERSION\n"
+    # - build-router-start:
+    #     inputs:
+    #     - workflows: xcode_113
+    #     - wait_for_builds: 'false'
+    #     - access_token: "$BITRISE_ACCESS_TOKEN"
+    #     - environment_key_list: "RELEASE_VERSION\n"
 
     - build-router-start:
         inputs:
