@@ -15,7 +15,7 @@
  */
 
 import Foundation
-import GRPC
+import SwiftGRPC
 import Logging
 import NIO
 

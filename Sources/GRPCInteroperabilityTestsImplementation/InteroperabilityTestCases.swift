@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import Foundation
-import GRPC
+import SwiftGRPC
 import GRPCInteroperabilityTestModels
 import NIOHPACK
 import NIOHTTP1

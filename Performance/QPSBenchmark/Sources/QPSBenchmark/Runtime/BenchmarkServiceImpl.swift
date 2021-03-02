@@ -15,7 +15,7 @@
  */
 
 import Foundation
-import GRPC
+import SwiftGRPC
 import NIO
 
 /// Implementation of asynchronous service for benchmarking.

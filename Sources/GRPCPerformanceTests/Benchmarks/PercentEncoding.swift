@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import Foundation
-import GRPC
+import SwiftGRPC
 import NIO
 
 class PercentEncoding: Benchmark {

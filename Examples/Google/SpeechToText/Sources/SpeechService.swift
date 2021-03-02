@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import GRPC
+import SwiftGRPC
 import Logging
 
 typealias Request = Google_Cloud_Speech_V1_StreamingRecognizeRequest

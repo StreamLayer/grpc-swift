@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import EchoModel
-import GRPC
+import SwiftGRPC
 import NIO
 
 /// The echo provider that comes with the example does some string processing, we'll avoid some of

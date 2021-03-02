@@ -15,7 +15,7 @@
  */
 import EchoModel
 import Foundation
-import GRPC
+import SwiftGRPC
 import XCTest
 
 class StreamingRequestClientCallTests: EchoTestCaseBase {

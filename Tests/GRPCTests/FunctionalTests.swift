@@ -16,7 +16,7 @@
 import Dispatch
 import EchoModel
 import Foundation
-@testable import GRPC
+@testable import SwiftGRPC
 import NIO
 import NIOHTTP1
 import NIOHTTP2

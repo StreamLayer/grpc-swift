@@ -15,7 +15,7 @@
  */
 
 import AVFoundation
-import GRPC
+import SwiftGRPC
 import SnapKit
 import UIKit
 

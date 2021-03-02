@@ -15,7 +15,7 @@
  */
 import Dispatch
 import Foundation
-import GRPC
+import SwiftGRPC
 import NIO
 import NIOHPACK
 import NIOHTTP1

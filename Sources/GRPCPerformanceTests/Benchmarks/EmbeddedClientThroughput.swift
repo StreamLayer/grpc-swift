@@ -15,7 +15,7 @@
  */
 import EchoModel
 import struct Foundation.Data
-import GRPC
+import SwiftGRPC
 import Logging
 import NIO
 import NIOHPACK

@@ -15,7 +15,7 @@
  */
 import EchoImplementation
 import EchoModel
-import GRPC
+import SwiftGRPC
 import HelloWorldModel
 import NIO
 import NIOHPACK

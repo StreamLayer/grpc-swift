@@ -16,7 +16,7 @@
 import ArgumentParser
 import Dispatch
 import EchoModel
-import GRPC
+import SwiftGRPC
 import Logging
 import NIO
 import NIOExtras

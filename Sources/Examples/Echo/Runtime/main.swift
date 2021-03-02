@@ -17,7 +17,7 @@ import ArgumentParser
 import EchoImplementation
 import EchoModel
 import Foundation
-import GRPC
+import SwiftGRPC
 import GRPCSampleData
 import Logging
 import NIO

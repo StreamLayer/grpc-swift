@@ -15,7 +15,7 @@
  */
 import EchoImplementation
 import EchoModel
-import GRPC
+import SwiftGRPC
 import NIO
 import NIOConcurrencyHelpers
 import XCTest

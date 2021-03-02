@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import GRPC
+import SwiftGRPC
 import NIO
 
 /// Protocol which clients must implement.

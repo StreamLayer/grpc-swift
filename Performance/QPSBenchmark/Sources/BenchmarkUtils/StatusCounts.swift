@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import GRPC
+import SwiftGRPC
 
 /// Count the number seen of each status code.
 public struct StatusCounts {

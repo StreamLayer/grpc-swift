@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import EchoImplementation
-@testable import GRPC
+@testable import SwiftGRPC
 import NIO
 import NIOHPACK
 import NIOHTTP2

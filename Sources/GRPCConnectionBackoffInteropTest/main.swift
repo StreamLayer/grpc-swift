@@ -15,7 +15,7 @@
  */
 import ArgumentParser
 import Foundation
-import GRPC
+import SwiftGRPC
 import GRPCInteroperabilityTestModels
 import Logging
 import NIO

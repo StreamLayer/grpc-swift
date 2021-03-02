@@ -18,7 +18,7 @@ import Foundation
 import FoundationNetworking
 #endif
 import EchoModel
-@testable import GRPC
+@testable import SwiftGRPC
 import NIO
 import XCTest
 

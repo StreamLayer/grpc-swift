@@ -59,7 +59,7 @@ final class GeneratorOptions {
   private(set) var protoToModuleMappings = ProtoFileToModuleMappings()
   private(set) var fileNaming = FileNaming.FullPath
   private(set) var extraModuleImports: [String] = []
-  private(set) var gRPCModuleName = "GRPC"
+  private(set) var gRPCModuleName = "SwiftGRPC"
 
   init(parameter: String?) throws {
     for pair in GeneratorOptions.parseParameter(string: parameter) {

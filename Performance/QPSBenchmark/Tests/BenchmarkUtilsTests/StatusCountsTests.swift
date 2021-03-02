@@ -15,7 +15,7 @@
  */
 
 @testable import BenchmarkUtils
-import GRPC
+import SwiftGRPC
 import XCTest
 
 class StatusCountsTests: XCTestCase {

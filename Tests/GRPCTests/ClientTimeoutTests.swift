@@ -15,7 +15,7 @@
  */
 import EchoModel
 import Foundation
-@testable import GRPC
+@testable import SwiftGRPC
 import NIO
 import XCTest
 

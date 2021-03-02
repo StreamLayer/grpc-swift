@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-@testable import GRPC
+@testable import SwiftGRPC
 import XCTest
 
 class ArrayBoundsCheckingTests: GRPCTestCase {

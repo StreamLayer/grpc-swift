@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import EchoModel
-import GRPC
+import SwiftGRPC
 import Logging
 import NIO
 import NIOHPACK

@@ -15,7 +15,7 @@ carthage_targets = [
     # "Echo",
     # "EchoImplementation",
     # "EchoModel",
-    "GRPC",
+    "SwiftGRPC",
     # "GRPCConnectionBackoffInteropTest",
     # "GRPCInteroperabilityTestModels",
     # "GRPCInteroperabilityTests",
@@ -151,9 +151,9 @@ actionContent.add_attribute("scriptText", scriptText)
 environmentBuildable = REXML::Element.new("EnvironmentBuildable", actionContent)
 buildableReference = REXML::Element.new("BuildableReference", environmentBuildable)
 buildableReference.add_attribute("BuildableIdentifier","primary")
-buildableReference.add_attribute("BlueprintIdentifier","grpc-swift::GRPC")
-buildableReference.add_attribute("BuildableName","GRPC.framework")
-buildableReference.add_attribute("BlueprintName","GRPC")
+buildableReference.add_attribute("BlueprintIdentifier","grpc-swift::SwiftGRPC")
+buildableReference.add_attribute("BuildableName","SwiftGRPC.framework")
+buildableReference.add_attribute("BlueprintName","SwiftGRPC")
 buildableReference.add_attribute("ReferencedContainer","container:GRPC.xcodeproj")
 
 buildActions.unshift(preActions)

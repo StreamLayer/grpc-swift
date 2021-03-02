@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import Foundation
-@testable import GRPC
+@testable import SwiftGRPC
 import NIO
 import NIOTransportServices
 import XCTest

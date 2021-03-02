@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import EchoModel
-import GRPC
+import SwiftGRPC
 import NIO
 
 // All client interceptors derive from the 'ClientInterceptor' base class. We know the request and

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import struct Foundation.Data
-@testable import GRPC
+@testable import SwiftGRPC
 import NIO
 import NIOHPACK
 import NIOHTTP1

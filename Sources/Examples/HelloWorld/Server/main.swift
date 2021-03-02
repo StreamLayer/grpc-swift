@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import ArgumentParser
-import GRPC
+import SwiftGRPC
 import HelloWorldModel
 import Logging
 import NIO

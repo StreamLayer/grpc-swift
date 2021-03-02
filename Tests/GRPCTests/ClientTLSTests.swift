@@ -16,7 +16,7 @@
 import EchoImplementation
 import EchoModel
 import Foundation
-import GRPC
+import SwiftGRPC
 import GRPCSampleData
 import NIO
 import NIOSSL

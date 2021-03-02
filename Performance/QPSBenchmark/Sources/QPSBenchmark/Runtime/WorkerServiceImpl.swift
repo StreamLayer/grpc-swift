@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import GRPC
+import SwiftGRPC
 import NIO
 
 // Implementation of the control service for communication with the driver process.

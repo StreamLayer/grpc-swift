@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import EchoModel
-@testable import GRPC
+@testable import SwiftGRPC
 import NIO
 import NIOHTTP2
 import XCTest

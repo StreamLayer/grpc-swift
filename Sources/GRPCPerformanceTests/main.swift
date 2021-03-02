@@ -16,7 +16,7 @@
 import ArgumentParser
 import EchoModel
 import Foundation
-import GRPC
+import SwiftGRPC
 import Logging
 import NIO
 import NIOSSL
