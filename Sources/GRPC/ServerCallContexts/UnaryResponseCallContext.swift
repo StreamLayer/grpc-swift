@@ -35,15 +35,52 @@ open class UnaryResponseCallContext<Response>: ServerCallContextBase, StatusOnly
 
   /// The status sent back to the client at the end of the RPC, providing the `responsePromise` was
   /// completed successfully.
-  public var responseStatus: GRPCStatus = .ok
+  ///
+  /// - Important: This  *must* be accessed from the context's `eventLoop` in order to ensure
+  ///   thread-safety.
+  public var responseStatus: GRPCStatus {
+    get {
+      self.eventLoop.assertInEventLoop()
+      return self._responseStatus
+    }
+    set {
+      self.eventLoop.assertInEventLoop()
+      self._responseStatus = newValue
+    }
+  }
 
+  private var _responseStatus: GRPCStatus = .ok
+
+  @available(*, deprecated, renamed: "init(eventLoop:headers:logger:userInfo:closeFuture:)")
   public convenience init(
     eventLoop: EventLoop,
     headers: HPACKHeaders,
     logger: Logger,
     userInfo: UserInfo = UserInfo()
   ) {
-    self.init(eventLoop: eventLoop, headers: headers, logger: logger, userInfoRef: .init(userInfo))
+    self.init(
+      eventLoop: eventLoop,
+      headers: headers,
+      logger: logger,
+      userInfoRef: .init(userInfo),
+      closeFuture: eventLoop.makeFailedFuture(GRPCStatus.closeFutureNotImplemented)
+    )
+  }
+
+  public convenience init(
+    eventLoop: EventLoop,
+    headers: HPACKHeaders,
+    logger: Logger,
+    userInfo: UserInfo = UserInfo(),
+    closeFuture: EventLoopFuture<Void>
+  ) {
+    self.init(
+      eventLoop: eventLoop,
+      headers: headers,
+      logger: logger,
+      userInfoRef: .init(userInfo),
+      closeFuture: closeFuture
+    )
   }
 
   @inlinable
@@ -51,10 +88,17 @@ open class UnaryResponseCallContext<Response>: ServerCallContextBase, StatusOnly
     eventLoop: EventLoop,
     headers: HPACKHeaders,
     logger: Logger,
-    userInfoRef: Ref<UserInfo>
+    userInfoRef: Ref<UserInfo>,
+    closeFuture: EventLoopFuture<Void>
   ) {
     self.responsePromise = eventLoop.makePromise()
-    super.init(eventLoop: eventLoop, headers: headers, logger: logger, userInfoRef: userInfoRef)
+    super.init(
+      eventLoop: eventLoop,
+      headers: headers,
+      logger: logger,
+      userInfoRef: userInfoRef,
+      closeFuture: closeFuture
+    )
   }
 }
 

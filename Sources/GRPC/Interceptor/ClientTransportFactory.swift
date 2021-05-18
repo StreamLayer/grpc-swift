@@ -88,12 +88,10 @@ internal struct ClientTransportFactory<Request, Response> {
   /// - Parameter fakeResponse: The fake response stream.
   /// - Returns: A factory for making and configuring fake transport.
   internal static func fake<Request: SwiftProtobuf.Message, Response: SwiftProtobuf.Message>(
-    _ fakeResponse: _FakeResponseStream<Request, Response>?,
-    on eventLoop: EventLoop
+    _ fakeResponse: _FakeResponseStream<Request, Response>?
   ) -> ClientTransportFactory<Request, Response> {
     let factory = FakeClientTransportFactory(
       fakeResponse,
-      on: eventLoop,
       requestSerializer: ProtobufSerializer(),
       requestDeserializer: ProtobufDeserializer(),
       responseSerializer: ProtobufSerializer(),
@@ -106,12 +104,10 @@ internal struct ClientTransportFactory<Request, Response> {
   /// - Parameter fakeResponse: The fake response stream.
   /// - Returns: A factory for making and configuring fake transport.
   internal static func fake<Request: GRPCPayload, Response: GRPCPayload>(
-    _ fakeResponse: _FakeResponseStream<Request, Response>?,
-    on eventLoop: EventLoop
+    _ fakeResponse: _FakeResponseStream<Request, Response>?
   ) -> ClientTransportFactory<Request, Response> {
     let factory = FakeClientTransportFactory(
       fakeResponse,
-      on: eventLoop,
       requestSerializer: GRPCPayloadSerializer(),
       requestDeserializer: GRPCPayloadDeserializer(),
       responseSerializer: GRPCPayloadSerializer(),
@@ -133,6 +129,7 @@ internal struct ClientTransportFactory<Request, Response> {
     to path: String,
     for type: GRPCCallType,
     withOptions options: CallOptions,
+    onEventLoop eventLoop: EventLoop,
     interceptedBy interceptors: [ClientInterceptor<Request, Response>],
     onError: @escaping (Error) -> Void,
     onResponsePart: @escaping (GRPCClientResponsePart<Response>) -> Void
@@ -143,6 +140,7 @@ internal struct ClientTransportFactory<Request, Response> {
         to: path,
         for: type,
         withOptions: options,
+        onEventLoop: eventLoop,
         interceptedBy: interceptors,
         onError: onError,
         onResponsePart: onResponsePart
@@ -154,6 +152,7 @@ internal struct ClientTransportFactory<Request, Response> {
         to: path,
         for: type,
         withOptions: options,
+        onEventLoop: eventLoop,
         interceptedBy: interceptors,
         onError: onError,
         onResponsePart
@@ -203,13 +202,14 @@ private struct HTTP2ClientTransportFactory<Request, Response> {
     to path: String,
     for type: GRPCCallType,
     withOptions options: CallOptions,
+    onEventLoop eventLoop: EventLoop,
     interceptedBy interceptors: [ClientInterceptor<Request, Response>],
     onError: @escaping (Error) -> Void,
     onResponsePart: @escaping (GRPCClientResponsePart<Response>) -> Void
   ) -> ClientTransport<Request, Response> {
     return ClientTransport(
       details: self.makeCallDetails(type: type, path: path, options: options),
-      eventLoop: self.multiplexer.eventLoop,
+      eventLoop: eventLoop,
       interceptors: interceptors,
       serializer: self.serializer,
       deserializer: self.deserializer,
@@ -225,13 +225,22 @@ private struct HTTP2ClientTransportFactory<Request, Response> {
         let streamPromise = self.multiplexer.eventLoop.makePromise(of: Channel.self)
 
         multiplexer.createStreamChannel(promise: streamPromise) { streamChannel in
-          streamChannel.pipeline.addHandlers([
-            GRPCClientChannelHandler(
+          // This initializer will always occur on the appropriate event loop, sync operations are
+          // fine here.
+          let syncOperations = streamChannel.pipeline.syncOperations
+
+          do {
+            let clientHandler = GRPCClientChannelHandler(
               callType: transport.callDetails.type,
               logger: transport.logger
-            ),
-            transport,
-          ])
+            )
+            try syncOperations.addHandler(clientHandler)
+            try syncOperations.addHandler(transport)
+          } catch {
+            return streamChannel.eventLoop.makeFailedFuture(error)
+          }
+
+          return streamChannel.eventLoop.makeSucceededVoidFuture()
         }
 
         // We don't need the stream, but we do need to know it was correctly configured.
@@ -260,10 +269,6 @@ private struct FakeClientTransportFactory<Request, Response> {
   /// configure their client. The result will be a transport which immediately fails.
   private var fakeResponseStream: _FakeResponseStream<Request, Response>?
 
-  /// The `EventLoop` from the response stream, or an `EmbeddedEventLoop` should the response
-  /// stream be `nil`.
-  private var eventLoop: EventLoop
-
   /// The request serializer.
   private let requestSerializer: AnySerializer<Request>
 
@@ -280,7 +285,6 @@ private struct FakeClientTransportFactory<Request, Response> {
     ResponseDeserializer: MessageDeserializer
   >(
     _ fakeResponseStream: _FakeResponseStream<Request, Response>?,
-    on eventLoop: EventLoop,
     requestSerializer: RequestSerializer,
     requestDeserializer: RequestDeserializer,
     responseSerializer: ResponseSerializer,
@@ -291,7 +295,6 @@ private struct FakeClientTransportFactory<Request, Response> {
     ResponseDeserializer.Output == Response
   {
     self.fakeResponseStream = fakeResponseStream
-    self.eventLoop = eventLoop
     self.requestSerializer = AnySerializer(wrapping: requestSerializer)
     self.responseDeserializer = AnyDeserializer(wrapping: responseDeserializer)
     self.codec = GRPCClientReverseCodecHandler(
@@ -304,6 +307,7 @@ private struct FakeClientTransportFactory<Request, Response> {
     to path: String,
     for type: GRPCCallType,
     withOptions options: CallOptions,
+    onEventLoop eventLoop: EventLoop,
     interceptedBy interceptors: [ClientInterceptor<Request, Response>],
     onError: @escaping (Error) -> Void,
     _ onResponsePart: @escaping (GRPCClientResponsePart<Response>) -> Void
@@ -316,7 +320,7 @@ private struct FakeClientTransportFactory<Request, Response> {
         scheme: "http",
         options: options
       ),
-      eventLoop: self.eventLoop,
+      eventLoop: eventLoop,
       interceptors: interceptors,
       serializer: self.requestSerializer,
       deserializer: self.responseDeserializer,
@@ -338,7 +342,8 @@ private struct FakeClientTransportFactory<Request, Response> {
           }
         }
       } else {
-        return self.eventLoop.makeFailedFuture(GRPCStatus(code: .unavailable, message: nil))
+        return transport.callEventLoop
+          .makeFailedFuture(GRPCStatus(code: .unavailable, message: nil))
       }
     }
   }
