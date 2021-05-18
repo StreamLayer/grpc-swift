@@ -26,7 +26,7 @@ let package = Package(
     .target(
       name: "ServerFuzzer",
       dependencies: [
-        .product(name: "GRPC", package: "grpc-swift"),
+        .product(name: "SwiftGRPC", package: "grpc-swift"),
         .product(name: "NIO", package: "swift-nio"),
         .target(name: "EchoImplementation"),
       ]
@@ -34,13 +34,13 @@ let package = Package(
     .target(
       name: "EchoModel",
       dependencies: [
-        .product(name: "GRPC", package: "grpc-swift"),
+        .product(name: "SwiftGRPC", package: "grpc-swift"),
       ]
     ),
     .target(
       name: "EchoImplementation",
       dependencies: [
-        .product(name: "GRPC", package: "grpc-swift"),
+        .product(name: "SwiftGRPC", package: "grpc-swift"),
         .target(name: "EchoModel"),
       ]
     ),
