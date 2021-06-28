@@ -101,7 +101,7 @@ workflows:
       bitrise.io:
         stack: osx-xcode-12.5.x
     envs:
-    - EXPECTED_SWIFT: 5.4.1+7ad2e0b380044d938a33b59014f8e0b3
+    - EXPECTED_SWIFT: 5.4.2+8078d64771bb12a43bd33ed1fcba81b4
     after_run:
     - _xcode
 
